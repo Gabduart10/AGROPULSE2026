@@ -1,0 +1,15 @@
+django>=4.2,<5.0
+djangorestframework
+djangorestframework-simplejwt
+django-cors-headers
+python-decouple
+dj-database-url
+psycopg2-binary
+gunicorn
+whitenoise
+boto3
+colorthief
+Pillow
+requests
+reportlab
+openpyxl
