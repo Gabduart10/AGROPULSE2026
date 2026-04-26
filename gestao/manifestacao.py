@@ -286,6 +286,19 @@ def carta_correcao_nfe(empresa_id, usuario, referencia, correcao):
     if len(correcao.strip()) < 15:
         return False, 'O texto da correção deve ter pelo menos 15 caracteres.'
 
+    # Enforce 20 CC-e limit per NF-e (NT 2013.001 — SEFAZ)
+    from .models import LogAuditoria
+    count_cce = LogAuditoria.objects.filter(
+        empresa_id=empresa_id,
+        acao='carta_correcao_nfe',
+        descricao__contains=f"ref '{referencia}': OK",
+    ).count()
+    if count_cce >= 20:
+        return False, (
+            f'Limite de 20 CC-e atingido para esta NF-e ({count_cce}/20). '
+            'Não é possível enviar mais correções. Se necessário, cancele e reemita a nota.'
+        )
+
     try:
         config = _get_config(empresa_id)
     except ValueError as e:

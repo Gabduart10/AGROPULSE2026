@@ -335,3 +335,187 @@ def gerar_efd_reinf_r1000(empresa_id):
 </Reinf>"""
 
     return xml, None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EFD CONTRIBUIÇÕES (PIS/COFINS) — IN RFB 2.005/2021
+# ══════════════════════════════════════════════════════════════════════════════
+
+def gerar_efd_contribuicoes(empresa_id, mes, ano):
+    """
+    Gera o arquivo EFD Contribuições (PIS/COFINS) para o período.
+
+    Registros gerados:
+      0000/0001/0990 — Bloco 0
+      0100 — Dados contribuinte
+      0110 — Regime apuração PIS/COFINS
+      0150 — Participantes
+      0200 — Itens
+      A001/A990 — Bloco A (NFS-e) vazio
+      C001/C100/C170/C190/C990 — Bloco C (NF-e)
+      D001/D990 — Bloco D vazio
+      F001/F990 — Bloco F vazio
+      M001/M100/M200/M500/M600/M990 — Apuração
+      1001/1990 — Bloco 1 vazio
+      9001/9900/9990/9999 — Encerramento
+    """
+    from .models import ConfiguracaoFiscal, Empresa, NotaFiscal
+    from datetime import timedelta
+
+    try:
+        empresa = Empresa.objects.get(id=empresa_id)
+        config  = ConfiguracaoFiscal.objects.get(empresa_id=empresa_id)
+    except Exception as e:
+        return None, f'Configuração não encontrada: {str(e)}'
+
+    inicio  = date(ano, mes, 1)
+    fim_exc = date(ano, mes + 1, 1) if mes < 12 else date(ano + 1, 1, 1)
+    fim_inc = fim_exc - timedelta(days=1)
+
+    linhas   = []
+    contagem = {}
+
+    def add(reg, campos):
+        linha = '|' + '|'.join(str(c) for c in campos) + '|'
+        linhas.append(linha)
+        contagem[reg] = contagem.get(reg, 0) + 1
+
+    cnpj = (config.cnpj or '').replace('.', '').replace('/', '').replace('-', '')
+    ie   = (config.inscricao_estadual or '').replace('.', '').replace('-', '').replace('/', '')
+    # 1=cumulativo (LP/Simples), 2=não-cumulativo (LR)
+    regime_pis = '1' if config.regime_tributario in ('simples', 'presumido') else '2'
+
+    # ── Bloco 0 ──────────────────────────────────────────────────────────────
+    add('0000', [
+        '0000', '006', '0',
+        inicio.strftime('%d%m%Y'), fim_inc.strftime('%d%m%Y'),
+        empresa.nome, cnpj, config.uf or 'SP', ie,
+        '', '', config.crt or '1', regime_pis, '0',
+    ])
+    add('0001', ['0001', '0'])
+    add('0100', ['0100', '', cnpj, '', '', '', ie, '', '', '', '', ''])
+    add('0110', ['0110', regime_pis, 'N', '', '', '', ''])
+
+    notas = NotaFiscal.objects.filter(
+        empresa=empresa,
+        data_emissao__gte=inicio,
+        data_emissao__lt=fim_exc,
+    ).select_related('cliente').prefetch_related('itens__produto')
+
+    clientes_adicionados = set()
+    for nf in notas:
+        if nf.cliente_id and nf.cliente_id not in clientes_adicionados:
+            c = nf.cliente
+            cnpj_c = (c.cnpj_cpf or '').replace('.', '').replace('/', '').replace('-', '')
+            add('0150', [
+                '0150', str(c.id), '', 'PJ' if len(cnpj_c) == 14 else 'PF',
+                cnpj_c, '', c.nome_razao, '',
+                getattr(c, 'endereco', ''), '',
+                getattr(c, 'cidade', ''), getattr(c, 'uf', ''),
+                getattr(c, 'email', ''), getattr(c, 'telefone', ''),
+            ])
+            clientes_adicionados.add(c.id)
+
+    produtos_adicionados = set()
+    for nf in notas:
+        for item in nf.itens.select_related('produto').all():
+            p = item.produto
+            if p and p.id not in produtos_adicionados:
+                add('0200', ['0200', p.sku, p.nome, p.unidade_medida, p.ncm or '', '', '', '', '', '', '', ''])
+                produtos_adicionados.add(p.id)
+
+    add('0990', ['0990', len(linhas) + 1])
+
+    # ── Bloco A (NFS-e) — vazio ───────────────────────────────────────────────
+    add('A001', ['A001', '1'])
+    add('A990', ['A990', 2])
+
+    # ── Bloco C (NF-e) ───────────────────────────────────────────────────────
+    add('C001', ['C001', '0'])
+
+    total_pis    = Decimal('0.00')
+    total_cofins = Decimal('0.00')
+    aliq_pis    = Decimal('0.65') if regime_pis == '1' else Decimal('1.65')
+    aliq_cofins = Decimal('3.00') if regime_pis == '1' else Decimal('7.60')
+
+    for nf in notas:
+        cnpj_dest = ''
+        if nf.cliente_id:
+            cnpj_dest = (nf.cliente.cnpj_cpf or '').replace('.', '').replace('/', '').replace('-', '')
+
+        add('C100', [
+            'C100', '1', '0', cnpj_dest, '55',
+            nf.serie or '1', nf.numero_nota or '', '',
+            nf.data_emissao.strftime('%d%m%Y') if nf.data_emissao else '',
+            nf.data_emissao.strftime('%d%m%Y') if nf.data_emissao else '',
+            getattr(nf.cliente, 'uf', '') if nf.cliente_id else '',
+            round(nf.valor_total or 0, 2),
+            '', '', round(nf.valor_total or 0, 2),
+            '0', '0', '0', '0', '0', '0', '0', '',
+        ])
+
+        n_item = 0
+        for item in nf.itens.select_related('produto').all():
+            n_item += 1
+            subtotal  = Decimal(str(item.valor_total or 0))
+            vl_pis    = (subtotal * aliq_pis    / 100).quantize(Decimal('0.01'))
+            vl_cofins = (subtotal * aliq_cofins / 100).quantize(Decimal('0.01'))
+            total_pis    += vl_pis
+            total_cofins += vl_cofins
+
+            add('C170', [
+                'C170', n_item,
+                item.produto.sku if item.produto else '',
+                item.produto.nome if item.produto else '',
+                float(item.quantidade or 0),
+                item.produto.unidade_medida if item.produto else 'UN',
+                float(item.valor_unitario or 0),
+                float(subtotal),
+                '', '', '', '',
+                '01', float(aliq_pis), float(vl_pis),
+                '01', float(aliq_cofins), float(vl_cofins), '',
+            ])
+
+        add('C190', ['C190', '55', '', round(nf.valor_total or 0, 2), 0, 0, 0])
+
+    add('C990', ['C990', sum(1 for l in linhas if l.startswith('|C')) + 1])
+
+    # ── Blocos D e F — vazios ─────────────────────────────────────────────────
+    add('D001', ['D001', '1'])
+    add('D990', ['D990', 2])
+    add('F001', ['F001', '1'])
+    add('F990', ['F990', 2])
+
+    # ── Bloco M — Apuração ────────────────────────────────────────────────────
+    add('M001', ['M001', '0'])
+    add('M100', ['M100', '1', regime_pis, '', 0, '', '', '', '', '', '', '', ''])
+    add('M200', [
+        'M200',
+        float(total_pis), 0, 0, 0, 0, float(total_pis),
+        0, 0, 0,
+        float(total_pis), 0, float(total_pis),
+        inicio.strftime('%d%m%Y'), fim_inc.strftime('%d%m%Y'),
+    ])
+    add('M500', ['M500', '1', regime_pis, '', 0, '', '', '', '', '', '', '', ''])
+    add('M600', [
+        'M600',
+        float(total_cofins), 0, 0, 0, 0, float(total_cofins),
+        0, 0, 0,
+        float(total_cofins), 0, float(total_cofins),
+        inicio.strftime('%d%m%Y'), fim_inc.strftime('%d%m%Y'),
+    ])
+    add('M990', ['M990', sum(1 for l in linhas if l.startswith('|M')) + 1])
+
+    # ── Bloco 1 — vazio ───────────────────────────────────────────────────────
+    add('1001', ['1001', '1'])
+    add('1990', ['1990', 2])
+
+    # ── Bloco 9 — encerramento ────────────────────────────────────────────────
+    add('9001', ['9001', '0'])
+    for reg, qtd in sorted(contagem.items()):
+        add('9900', ['9900', reg, qtd])
+    total_linhas = len(linhas) + 3
+    add('9990', ['9990', total_linhas])
+    add('9999', ['9999', len(linhas) + 1])
+
+    return '\n'.join(linhas), None

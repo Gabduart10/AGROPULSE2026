@@ -7,7 +7,7 @@ from .dashboard_perfil import dashboard_por_perfil
 from .aprovacoes import verificar_travas_pedido, reter_pedido_para_aprovacao, aprovar_pedido, recusar_pedido, listar_fila_aprovacao
 from .caixa import abrir_caixa, fechar_caixa, registrar_sangria, registrar_suprimento, resumo_caixa
 from django.utils import timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from .expedicao import gerar_romaneio_cego, listar_pedidos_expedicao
 from .pedido_compra import criar_pedido_compra, vincular_nf_entrada, listar_pedidos_compra
 from .whitelabel import upload_logo_s3, obter_configuracao_whitelabel
@@ -40,7 +40,7 @@ from .serializers import (
     ProdutoSerializer, ContaPagarSerializer, ContaReceberSerializer,
     GrupoClienteSerializer, TabelaPrecoSerializer, ItemTabelaPrecoSerializer,
     VeiculoSerializer, FazendaSerializer, GlebaSerializer, TalhaoSerializer,
-    DevolucaoVendaSerializer, BancoSerializer,
+    DevolucaoVendaSerializer, BancoSerializer, LogAuditoriaSerializer,
 )
 from .filtros_export import get_filtros_base, exportar_pdf, exportar_excel, preparar_exportacao
 
@@ -93,7 +93,7 @@ from .models import (
     ContaPagar, ContaReceber,
     GrupoCliente, TabelaPreco, ItemTabelaPreco,
     Veiculo, Fazenda, Gleba, Talhao,
-    DevolucaoVenda, Banco,
+    DevolucaoVenda, Banco, LogAuditoria,
 )
 from .relatorios import (
     gerar_dre,
@@ -128,7 +128,16 @@ from .pdv import criar_venda_pdv, cancelar_venda_pdv
 # ==========================================
 
 def _get_empresa_id(request):
-    """Retorna o empresa_id do usuário logado com fallback seguro para testes."""
+    """Retorna o empresa_id do usuário logado.
+
+    SuperHost (is_staff sem empresa): pode passar ?empresa_id=X para navegar
+    pelo ambiente de qualquer cliente. Sem o parâmetro, retorna a primeira
+    empresa do banco (comportamento de dev/fallback).
+    """
+    if getattr(request.user, 'is_staff', False):
+        param = request.query_params.get('empresa_id') or request.data.get('empresa_id')
+        if param:
+            return int(param)
     if request.user.is_authenticated and hasattr(request.user, 'empresa') and request.user.empresa:
         return request.user.empresa.id
     primeira = Empresa.objects.first()
@@ -322,6 +331,7 @@ class ProdutoViewSet(ExportMixin, viewsets.ModelViewSet):
         (lambda o: o.sku or '',                               'SKU'),
         (lambda o: o.ncm or '',                               'NCM'),
         (lambda o: o.unidade_medida or '',                    'Unidade'),
+        (lambda o: f'{o.comissao_percentual:.2f}%' if o.comissao_percentual is not None else '', 'Comissão (%)'),
         (lambda o: f'R$ {o.preco_venda:,.2f}' if o.preco_venda else '', 'Preço Venda'),
         (lambda o: str(o.quantidade or 0),                    'Qtd. Estoque'),
         (lambda o: str(o.estoque_minimo or 0),                'Estoque Mínimo'),
@@ -342,6 +352,24 @@ class ProdutoViewSet(ExportMixin, viewsets.ModelViewSet):
         # Vendedor e administrativo não veem custo/margem — serializer controla,
         # mas o queryset já fica filtrado para não expor campos sensíveis acidentalmente
         return qs.order_by('nome')
+
+    def perform_create(self, serializer):
+        empresa_id = _get_empresa_id(self.request)
+        from .models import Empresa
+        empresa = Empresa.objects.get(id=empresa_id)
+        comissao = serializer.validated_data.get('comissao_percentual')
+        if comissao is None:
+            comissao = empresa.comissao_padrao
+        serializer.save(empresa_id=empresa_id, comissao_percentual=comissao)
+
+    def perform_update(self, serializer):
+        empresa_id = _get_empresa_id(self.request)
+        from .models import Empresa
+        empresa = Empresa.objects.get(id=empresa_id)
+        if 'comissao_percentual' in serializer.validated_data and serializer.validated_data.get('comissao_percentual') is None:
+            serializer.save(empresa_id=empresa_id, comissao_percentual=empresa.comissao_padrao)
+        else:
+            serializer.save(empresa_id=empresa_id)
 
 
 class ContaPagarViewSet(ExportMixin, viewsets.ModelViewSet):
@@ -407,14 +435,36 @@ def api_notificacoes(request):
     empresa_id = _get_empresa_id(request)
     if not empresa_id:
         return Response({'erro': 'Empresa não encontrada.'}, status=400)
-    notificacoes = Notificacao.objects.filter(
+
+    nivel = getattr(request.user, 'nivel', None)
+
+    qs = Notificacao.objects.filter(
         empresa_id=empresa_id, lida=False,
-    ).filter(usuario__in=[request.user, None]).order_by('-data_criacao')[:30]
-    return Response([{
-        'id': n.id, 'tipo': n.tipo, 'prioridade': n.prioridade,
-        'titulo': n.titulo, 'mensagem': n.mensagem,
-        'data': n.data_criacao.strftime('%d/%m/%Y %H:%M'),
-    } for n in notificacoes if n.visivel])
+    ).filter(
+        models.Q(usuario=request.user) | models.Q(usuario__isnull=True)
+    ).order_by('-prioridade', '-data_criacao')[:50]
+
+    resultado = []
+    for n in qs:
+        if not n.visivel:
+            continue
+        # Filtra por nível quando visivel_para_nivel está preenchido
+        if n.visivel_para_nivel and nivel:
+            niveis_alvo = [v.strip() for v in n.visivel_para_nivel.split(',')]
+            if nivel not in niveis_alvo:
+                continue
+        resultado.append({
+            'id': n.id,
+            'tipo': n.tipo,
+            'prioridade': n.prioridade,
+            'titulo': n.titulo,
+            'mensagem': n.mensagem,
+            'data': n.data_criacao.strftime('%d/%m/%Y %H:%M'),
+        })
+        if len(resultado) == 30:
+            break
+
+    return Response(resultado)
 
 
 @api_view(['POST'])
@@ -1517,15 +1567,25 @@ def api_login(request):
         return Response({'erro': 'Informe usuário e senha.'}, status=400)
  
     user = authenticate(request, username=username, password=password)
- 
+
     if not user:
         return Response({'erro': 'Usuário ou senha incorretos.'}, status=401)
- 
+
     if not user.is_active:
         return Response({'erro': 'Usuário inativo. Contate o administrador.'}, status=403)
 
     # Superhost (is_staff sem empresa) bypassa a exigência de empresa
     is_superhost = user.is_staff and not user.empresa
+
+    # Verifica 2FA se habilitado
+    if getattr(user, 'totp_habilitado', False) and user.totp_secret:
+        totp_code = request.data.get('totp_code', '').strip()
+        if not totp_code:
+            return Response({'requires_2fa': True}, status=200)
+        import pyotp
+        totp = pyotp.TOTP(user.totp_secret)
+        if not totp.verify(totp_code, valid_window=1):
+            return Response({'erro': 'Código 2FA inválido.'}, status=401)
 
     if not is_superhost and not user.empresa:
         return Response({'erro': 'Usuário sem empresa vinculada. Contate o administrador.'}, status=403)
@@ -2314,7 +2374,7 @@ from .financeiro_avancado import (
     fluxo_caixa,
     importar_ofx, conciliar_manualmente,
     gerar_boleto,
-    painel_superhost, consolidado_matriz,
+    painel_superhost, consolidado_matriz, detalhe_filial,
 )
 
 
@@ -2647,6 +2707,19 @@ def api_superhost_clientes(request):
     """Painel SuperHost — lista todos os clientes. Só para is_staff."""
     if not request.user.is_staff:
         return Response({'erro': 'Acesso negado.'}, status=403)
+    from .models import LogAuditoria
+    # Log uma entrada por acesso ao painel (usa a primeira empresa como âncora)
+    primeira = Empresa.objects.first()
+    if primeira:
+        LogAuditoria.registrar(
+            empresa=primeira,
+            usuario=request.user,
+            acao='acesso_superhost',
+            modelo_afetado='Empresa',
+            registro_id=0,
+            descricao='SuperHost acessou painel geral de clientes',
+            request=request,
+        )
     return Response(painel_superhost())
 
 
@@ -2655,16 +2728,29 @@ def api_superhost_bloquear(request, empresa_id):
     """Bloqueia/desbloqueia acesso de uma empresa. Só para is_staff."""
     if not request.user.is_staff:
         return Response({'erro': 'Acesso negado.'}, status=403)
-    from .models import Empresa
+    from .models import LogAuditoria
     try:
         empresa = Empresa.objects.get(id=empresa_id)
     except Empresa.DoesNotExist:
         return Response({'erro': 'Empresa não encontrada.'}, status=404)
     acao = request.data.get('acao', 'bloquear')
+    status_anterior = getattr(empresa, 'status_assinatura', '—')
     novo_status = 'bloqueada' if acao == 'bloquear' else 'ativa'
     if hasattr(empresa, 'status_assinatura'):
         empresa.status_assinatura = novo_status
         empresa.save(update_fields=['status_assinatura'])
+    LogAuditoria.registrar(
+        empresa=empresa,
+        usuario=request.user,
+        acao='bloqueio_empresa',
+        modelo_afetado='Empresa',
+        registro_id=empresa.id,
+        campo_alterado='status_assinatura',
+        valor_anterior=status_anterior,
+        valor_novo=novo_status,
+        descricao=f'SuperHost alterou status da empresa "{empresa.nome}" para {novo_status}',
+        request=request,
+    )
     return Response({'mensagem': f'Empresa {empresa.nome} {novo_status}.'})
 
 
@@ -2672,11 +2758,11 @@ def api_superhost_bloquear(request, empresa_id):
 def api_superhost_alterar_tipo(request, empresa_id):
     """
     Altera o tipo_negocio de uma empresa (revenda ↔ industria).
-    Exclusivo para superadmin (is_staff). Nunca exposto ao CEO do cliente.
+    Exclusivo para SuperHost (is_staff). Nunca exposto ao CEO do cliente.
     """
     if not request.user.is_staff:
         return Response({'erro': 'Apenas o SuperHost pode alterar o tipo de operação.'}, status=403)
-    from .models import Empresa
+    from .models import LogAuditoria
     try:
         empresa = Empresa.objects.get(id=empresa_id)
     except Empresa.DoesNotExist:
@@ -2688,11 +2774,145 @@ def api_superhost_alterar_tipo(request, empresa_id):
     tipo_anterior = empresa.tipo_negocio
     empresa.tipo_negocio = novo_tipo
     empresa.save(update_fields=['tipo_negocio'])
+    LogAuditoria.registrar(
+        empresa=empresa,
+        usuario=request.user,
+        acao='alteracao_tipo_empresa',
+        modelo_afetado='Empresa',
+        registro_id=empresa.id,
+        campo_alterado='tipo_negocio',
+        valor_anterior=tipo_anterior,
+        valor_novo=novo_tipo,
+        descricao=f'SuperHost alterou tipo de negócio de "{empresa.nome}": {tipo_anterior} → {novo_tipo}',
+        request=request,
+    )
     return Response({
         'mensagem': f'Tipo alterado de "{tipo_anterior}" para "{novo_tipo}".',
         'empresa': empresa.nome,
         'tipo_negocio': novo_tipo,
     })
+
+
+@api_view(['POST'])
+def api_superhost_acessar(request, empresa_id):
+    """
+    Registra acesso ao ambiente de um cliente com justificativa obrigatória.
+    Retorna confirmação — o frontend já gerencia o impersonation via localStorage.
+    """
+    if not request.user.is_staff:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    justificativa = request.data.get('justificativa', '').strip()
+    if len(justificativa) < 10:
+        return Response({'erro': 'Informe uma justificativa com pelo menos 10 caracteres.'}, status=400)
+    try:
+        empresa = Empresa.objects.get(id=empresa_id)
+    except Empresa.DoesNotExist:
+        return Response({'erro': 'Empresa não encontrada.'}, status=404)
+    from .models import LogAuditoria
+    LogAuditoria.registrar(
+        empresa=empresa,
+        usuario=request.user,
+        acao='acesso_superhost',
+        modelo_afetado='Empresa',
+        registro_id=empresa.id,
+        descricao=f'SuperHost acessou ambiente de "{empresa.nome}"',
+        justificativa=justificativa,
+        request=request,
+    )
+    return Response({'ok': True, 'empresa_nome': empresa.nome})
+
+
+@api_view(['GET', 'PATCH'])
+def api_superhost_plano(request, empresa_id):
+    """Lê e atualiza plano, limites e módulos de um tenant. Só is_staff."""
+    if not request.user.is_staff:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    try:
+        empresa = Empresa.objects.get(id=empresa_id)
+    except Empresa.DoesNotExist:
+        return Response({'erro': 'Empresa não encontrada.'}, status=404)
+
+    modulos = empresa.modulos_habilitados or Empresa.MODULOS_PADRAO.copy()
+
+    if request.method == 'GET':
+        return Response({
+            'plano': empresa.plano,
+            'max_usuarios': empresa.max_usuarios,
+            'modulos_habilitados': modulos,
+            'total_usuarios': empresa.usuarios.count() if hasattr(empresa, 'usuarios') else 0,
+        })
+
+    planos_validos = [p[0] for p in Empresa.PLANO_CHOICES]
+    update_fields = []
+
+    if 'plano' in request.data:
+        if request.data['plano'] not in planos_validos:
+            return Response({'erro': f'Plano inválido. Opções: {planos_validos}'}, status=400)
+        empresa.plano = request.data['plano']
+        update_fields.append('plano')
+
+    if 'max_usuarios' in request.data:
+        try:
+            empresa.max_usuarios = max(1, int(request.data['max_usuarios']))
+            update_fields.append('max_usuarios')
+        except (ValueError, TypeError):
+            return Response({'erro': 'max_usuarios deve ser inteiro.'}, status=400)
+
+    if 'modulos_habilitados' in request.data:
+        novos = request.data['modulos_habilitados']
+        if not isinstance(novos, dict):
+            return Response({'erro': 'modulos_habilitados deve ser um objeto.'}, status=400)
+        modulos.update({k: bool(v) for k, v in novos.items()})
+        empresa.modulos_habilitados = modulos
+        update_fields.append('modulos_habilitados')
+
+    if update_fields:
+        empresa.save(update_fields=update_fields)
+
+    return Response({
+        'mensagem': 'Plano atualizado.',
+        'plano': empresa.plano,
+        'max_usuarios': empresa.max_usuarios,
+        'modulos_habilitados': empresa.modulos_habilitados,
+    })
+
+
+@api_view(['GET', 'POST'])
+def api_superhost_unidades(request, empresa_id):
+    """Lista e cria filiais de um tenant. Só is_staff."""
+    if not request.user.is_staff:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    try:
+        matriz = Empresa.objects.get(id=empresa_id)
+    except Empresa.DoesNotExist:
+        return Response({'erro': 'Empresa não encontrada.'}, status=404)
+
+    if request.method == 'GET':
+        filiais = Empresa.objects.filter(empresa_matriz=matriz).values(
+            'id', 'nome', 'cnpj', 'tipo_negocio', 'plano', 'max_usuarios'
+        )
+        return Response({
+            'matriz': {'id': matriz.id, 'nome': matriz.nome, 'cnpj': matriz.cnpj},
+            'filiais': list(filiais),
+        })
+
+    nome = request.data.get('nome', '').strip()
+    cnpj = request.data.get('cnpj', '').strip()
+    if not nome or not cnpj:
+        return Response({'erro': 'Campos obrigatórios: nome, cnpj.'}, status=400)
+    if Empresa.objects.filter(cnpj=cnpj).exists():
+        return Response({'erro': 'CNPJ já cadastrado.'}, status=400)
+
+    filial = Empresa.objects.create(
+        nome=nome,
+        cnpj=cnpj,
+        tipo_negocio=request.data.get('tipo_negocio', matriz.tipo_negocio),
+        empresa_matriz=matriz,
+        plano=matriz.plano,
+        max_usuarios=int(request.data.get('max_usuarios', 5)),
+        modulos_habilitados=matriz.modulos_habilitados or Empresa.MODULOS_PADRAO.copy(),
+    )
+    return Response({'id': filial.id, 'mensagem': f'Filial "{filial.nome}" criada.'}, status=201)
 
 
 @api_view(['GET'])
@@ -2725,6 +2945,255 @@ def api_matriz_filiais(request):
     return Response({'matriz': matriz.nome, 'filiais': dados})
 
 
+@api_view(['GET'])
+def api_filial_detalhe(request, filial_id):
+    """Indicadores completos de uma filial. Apenas diretor da matriz."""
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel != 'diretor':
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    dados = detalhe_filial(empresa_matriz_id=empresa_id, filial_id=filial_id)
+    if dados is None:
+        return Response({'erro': 'Filial não encontrada ou não pertence a esta matriz.'}, status=404)
+    return Response(dados)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2FA — AUTENTICAÇÃO DE DOIS FATORES
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['POST'])
+def api_2fa_habilitar(request):
+    """Gera segredo TOTP e retorna URI para QR Code. Não ativa ainda."""
+    import pyotp
+    user = request.user
+    secret = pyotp.random_base32()
+    user.totp_secret = secret
+    user.totp_habilitado = False
+    user.save(update_fields=['totp_secret', 'totp_habilitado'])
+    totp = pyotp.TOTP(secret)
+    uri = totp.provisioning_uri(name=user.email or user.username, issuer_name='AgroPulse')
+    return Response({'secret': secret, 'uri': uri})
+
+
+@api_view(['POST'])
+def api_2fa_confirmar(request):
+    """Verifica código e ativa 2FA definitivamente."""
+    import pyotp
+    user = request.user
+    if not user.totp_secret:
+        return Response({'erro': 'Inicie o processo de habilitação primeiro.'}, status=400)
+    code = request.data.get('code', '').strip()
+    totp = pyotp.TOTP(user.totp_secret)
+    if not totp.verify(code, valid_window=1):
+        return Response({'erro': 'Código inválido. Tente novamente.'}, status=400)
+    user.totp_habilitado = True
+    user.save(update_fields=['totp_habilitado'])
+    return Response({'mensagem': '2FA ativado com sucesso.'})
+
+
+@api_view(['POST'])
+def api_2fa_desabilitar(request):
+    """Desativa 2FA. Exige confirmação com o código atual."""
+    import pyotp
+    user = request.user
+    if not user.totp_habilitado:
+        return Response({'erro': '2FA não está ativo.'}, status=400)
+    code = request.data.get('code', '').strip()
+    totp = pyotp.TOTP(user.totp_secret)
+    if not totp.verify(code, valid_window=1):
+        return Response({'erro': 'Código inválido.'}, status=400)
+    user.totp_secret = None
+    user.totp_habilitado = False
+    user.save(update_fields=['totp_secret', 'totp_habilitado'])
+    return Response({'mensagem': '2FA desativado.'})
+
+
+@api_view(['GET'])
+def api_2fa_status(request):
+    """Retorna se 2FA está habilitado para o usuário autenticado."""
+    return Response({'totp_habilitado': bool(getattr(request.user, 'totp_habilitado', False))})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONFIGURAÇÕES COMERCIAIS DA EMPRESA
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET', 'PATCH'])
+def api_config_comercial(request):
+    """
+    Lê e atualiza configurações comerciais da empresa.
+    Apenas diretor pode alterar.
+    Campos gerenciados: prazo_recompra_padrao, prazo_expiracao_pedido, comissao_padrao.
+    """
+    empresa_id = _get_empresa_id(request)
+    try:
+        empresa = Empresa.objects.get(id=empresa_id)
+    except Empresa.DoesNotExist:
+        return Response({'erro': 'Empresa não encontrada.'}, status=404)
+
+    if request.method == 'GET':
+        return Response({
+            'prazo_recompra_padrao': empresa.prazo_recompra_padrao,
+            'prazo_expiracao_pedido': empresa.prazo_expiracao_pedido,
+            'comissao_padrao': float(empresa.comissao_padrao),
+        })
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel != 'diretor':
+        return Response({'erro': 'Apenas o Diretor pode alterar configurações comerciais.'}, status=403)
+
+    campos_permitidos = ['prazo_recompra_padrao', 'prazo_expiracao_pedido', 'comissao_padrao']
+    update_fields = []
+    erros = {}
+
+    for campo in campos_permitidos:
+        if campo in request.data:
+            valor = request.data[campo]
+            if campo == 'comissao_padrao':
+                try:
+                    valor = Decimal(str(valor))
+                    if valor < 0 or valor > 100:
+                        raise ValueError
+                except (ValueError, TypeError, Decimal.InvalidOperation):
+                    erros[campo] = 'Deve ser um número entre 0 e 100.'
+                    continue
+            else:
+                try:
+                    valor = int(valor)
+                    if valor < 1:
+                        raise ValueError
+                except (ValueError, TypeError):
+                    erros[campo] = 'Deve ser um inteiro maior que zero.'
+                    continue
+            setattr(empresa, campo, valor)
+            update_fields.append(campo)
+
+    if erros:
+        return Response({'erros': erros}, status=400)
+
+    if update_fields:
+        empresa.save(update_fields=update_fields)
+
+    return Response({
+        'prazo_recompra_padrao': empresa.prazo_recompra_padrao,
+        'prazo_expiracao_pedido': empresa.prazo_expiracao_pedido,
+        'comissao_padrao': float(empresa.comissao_padrao),
+        'mensagem': 'Configurações atualizadas.',
+    })
+
+
+@api_view(['GET'])
+def api_auditoria_comercial(request):
+    """Lista logs de auditoria da empresa. Apenas diretor e gerente."""
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    limite = request.query_params.get('limit', 100)
+    try:
+        limite = min(max(int(limite), 1), 200)
+    except (ValueError, TypeError):
+        limite = 100
+
+    logs = LogAuditoria.objects.filter(empresa_id=empresa_id).select_related('usuario').order_by('-data_hora')[:limite]
+    serializer = LogAuditoriaSerializer(logs, many=True)
+    return Response(serializer.data)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# DATAS COMEMORATIVAS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET', 'POST'])
+def api_datas_comemorativas(request):
+    """Lista e cria datas comemorativas. Apenas diretor e gerente podem criar."""
+    from .models import DataComemorativa, Usuario
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+
+    if request.method == 'GET':
+        qs = DataComemorativa.objects.filter(empresa_id=empresa_id).prefetch_related('vendedores')
+        dados = []
+        for d in qs:
+            dados.append({
+                'id': d.id,
+                'nome': d.nome,
+                'dia': d.dia,
+                'mes': d.mes,
+                'dias_antecedencia': d.dias_antecedencia,
+                'para_todos_vendedores': d.para_todos_vendedores,
+                'vendedores': list(d.vendedores.values('id', 'nome')),
+                'ativo': d.ativo,
+            })
+        return Response(dados)
+
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    nome = request.data.get('nome', '').strip()
+    dia = request.data.get('dia')
+    mes = request.data.get('mes')
+    if not nome or not dia or not mes:
+        return Response({'erro': 'Campos obrigatórios: nome, dia, mes.'}, status=400)
+
+    try:
+        dia, mes = int(dia), int(mes)
+        if not (1 <= dia <= 31 and 1 <= mes <= 12):
+            raise ValueError
+    except (ValueError, TypeError):
+        return Response({'erro': 'dia e mes devem ser inteiros válidos.'}, status=400)
+
+    dc, criado = DataComemorativa.objects.get_or_create(
+        empresa_id=empresa_id, nome=nome, dia=dia, mes=mes,
+        defaults={
+            'dias_antecedencia': int(request.data.get('dias_antecedencia', 3)),
+            'para_todos_vendedores': request.data.get('para_todos_vendedores', True),
+            'ativo': True,
+            'criado_por': request.user,
+        }
+    )
+    if not criado:
+        return Response({'erro': 'Já existe uma data comemorativa com esse nome, dia e mês.'}, status=400)
+
+    vendedor_ids = request.data.get('vendedores', [])
+    if vendedor_ids and not dc.para_todos_vendedores:
+        dc.vendedores.set(Usuario.objects.filter(id__in=vendedor_ids, empresa_id=empresa_id))
+
+    return Response({'id': dc.id, 'mensagem': 'Data comemorativa criada.'}, status=201)
+
+
+@api_view(['PUT', 'PATCH', 'DELETE'])
+def api_data_comemorativa_detalhe(request, pk):
+    """Edita ou remove uma data comemorativa. Apenas diretor e gerente."""
+    from .models import DataComemorativa, Usuario
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    try:
+        dc = DataComemorativa.objects.get(id=pk, empresa_id=empresa_id)
+    except DataComemorativa.DoesNotExist:
+        return Response({'erro': 'Não encontrada.'}, status=404)
+
+    if request.method == 'DELETE':
+        dc.delete()
+        return Response({'mensagem': 'Removida.'})
+
+    for campo in ['nome', 'dia', 'mes', 'dias_antecedencia', 'para_todos_vendedores', 'ativo']:
+        if campo in request.data:
+            setattr(dc, campo, request.data[campo])
+    dc.save()
+
+    vendedor_ids = request.data.get('vendedores')
+    if vendedor_ids is not None and not dc.para_todos_vendedores:
+        dc.vendedores.set(Usuario.objects.filter(id__in=vendedor_ids, empresa_id=empresa_id))
+
+    return Response({'mensagem': 'Atualizada.'})
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # FASE 8 — SPED, EFD-REINF, IMPORTAÇÃO EM LOTE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2734,6 +3203,7 @@ from .importacao_sped import (
     consultar_nfes_sefaz_cnpj,
     gerar_sped_fiscal,
     gerar_efd_reinf_r1000,
+    gerar_efd_contribuicoes,
 )
 
 
@@ -2772,19 +3242,29 @@ def api_consultar_nfes_sefaz(request):
 @api_view(['GET'])
 def api_gerar_sped(request):
     """
-    Gera arquivo SPED Fiscal (EFD-ICMS/IPI) para download.
-    ?mes=3&ano=2026
+    Gera arquivo SPED Fiscal (EFD-ICMS/IPI) ou EFD Contribuições para download.
+    ?tipo=sped_fiscal|sped_contribuicoes&mes=3&ano=2026
     """
     nivel = getattr(request.user, 'nivel', None)
     if nivel not in ['diretor', 'gerente']:
         return Response({'erro': 'Acesso negado.'}, status=403)
     hoje = timezone.now()
-    mes = int(request.query_params.get('mes', hoje.month))
-    ano = int(request.query_params.get('ano', hoje.year))
+    mes  = int(request.query_params.get('mes', hoje.month))
+    ano  = int(request.query_params.get('ano', hoje.year))
+    tipo = request.query_params.get('tipo', 'sped_fiscal')
+
+    from django.http import HttpResponse
+    if tipo == 'sped_contribuicoes':
+        conteudo, erro = gerar_efd_contribuicoes(_get_empresa_id(request), mes, ano)
+        if erro:
+            return Response({'erro': erro}, status=400)
+        response = HttpResponse(conteudo, content_type='text/plain; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="EFD_Contribuicoes_{mes:02d}_{ano}.txt"'
+        return response
+
     conteudo, erro = gerar_sped_fiscal(_get_empresa_id(request), mes, ano)
     if erro:
         return Response({'erro': erro}, status=400)
-    from django.http import HttpResponse
     response = HttpResponse(conteudo, content_type='text/plain; charset=utf-8')
     response['Content-Disposition'] = f'attachment; filename="SPED_{mes:02d}_{ano}.txt"'
     return response
@@ -2803,6 +3283,263 @@ def api_gerar_efd_reinf(request):
     response = HttpResponse(xml, content_type='application/xml; charset=utf-8')
     response['Content-Disposition'] = 'attachment; filename="EFD_Reinf_R1000.xml"'
     return response
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FISCAL — Novos endpoints: Funrural, GNRE, NF-e Complementar, Contingência
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['POST'])
+def api_funrural_calcular(request):
+    """
+    Calcula Funrural para uma operação agropecuária.
+    Body: { "tipo_produtor": "pf"|"pj", "valor_operacao": 1000.00 }
+    """
+    tipo_produtor  = request.data.get('tipo_produtor', 'pf')
+    valor_operacao = Decimal(str(request.data.get('valor_operacao', 0)))
+
+    if tipo_produtor == 'pf':
+        aliq_funrural = Decimal('1.2')
+        aliq_gilrat   = Decimal('0.1')
+        aliq_senar    = Decimal('0.2')
+    else:
+        aliq_funrural = Decimal('1.5')
+        aliq_gilrat   = Decimal('0.1')
+        aliq_senar    = Decimal('0.25')
+
+    funrural = (valor_operacao * aliq_funrural / 100).quantize(Decimal('0.01'))
+    gilrat   = (valor_operacao * aliq_gilrat   / 100).quantize(Decimal('0.01'))
+    senar    = (valor_operacao * aliq_senar    / 100).quantize(Decimal('0.01'))
+
+    return Response({
+        'tipo_produtor':     tipo_produtor,
+        'valor_operacao':    float(valor_operacao),
+        'aliquota_funrural': float(aliq_funrural),
+        'aliquota_gilrat':   float(aliq_gilrat),
+        'aliquota_senar':    float(aliq_senar),
+        'funrural':          float(funrural),
+        'gilrat':            float(gilrat),
+        'senar':             float(senar),
+        'total':             float(funrural + gilrat + senar),
+        'liquido_produtor':  float(valor_operacao - funrural - gilrat - senar),
+    })
+
+
+@api_view(['GET'])
+def api_gnre_list(request):
+    """
+    Lista GNREs calculadas para operações interestaduais com ST no mês atual.
+    Cada linha usa MVA de 35% (padrão agro) — contador ajusta por NCM/UF.
+    """
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+    from .models import PedidoVenda, ConfiguracaoFiscal
+    import datetime as dt_module
+
+    hoje   = timezone.now().date()
+    inicio = hoje.replace(day=1)
+
+    try:
+        config = ConfiguracaoFiscal.objects.get(empresa_id=empresa_id)
+    except ConfiguracaoFiscal.DoesNotExist:
+        return Response([])
+
+    pedidos = PedidoVenda.objects.filter(
+        empresa_id=empresa_id,
+        status='faturado',
+        data_pedido__gte=inicio,
+    ).select_related('cliente').prefetch_related('itens__produto')
+
+    gnre_rows = []
+    for pedido in pedidos:
+        uf_destino = getattr(pedido.cliente, 'uf', None)
+        if not uf_destino or uf_destino == config.uf:
+            continue
+
+        for item in pedido.itens.all():
+            produto = item.produto
+            if not produto or not produto.ncm:
+                continue
+
+            mva = Decimal('35.00')
+            subtotal = item.preco_unitario * item.quantidade
+            base_st  = subtotal * (1 + mva / 100)
+            aliq_interna       = Decimal('17.00')
+            aliq_interestadual = Decimal('12.00')
+            gnre = base_st * aliq_interna / 100 - subtotal * aliq_interestadual / 100
+
+            if gnre <= 0:
+                continue
+
+            vencimento = ''
+            if hasattr(pedido.data_pedido, 'strftime'):
+                vencimento = (pedido.data_pedido + dt_module.timedelta(days=30)).strftime('%d/%m/%Y')
+
+            gnre_rows.append({
+                'nfe_numero':  f"pedido_{pedido.id}",
+                'destinatario': pedido.cliente.nome_razao,
+                'uf_destino':  uf_destino,
+                'ncm':         produto.ncm,
+                'mva_pct':     float(mva),
+                'base_st':     float(round(base_st, 2)),
+                'valor_gnre':  float(round(gnre, 2)),
+                'vencimento':  vencimento,
+                'pago':        False,
+            })
+
+    return Response(gnre_rows)
+
+
+@api_view(['POST'])
+def api_nfe_complementar(request, pedido_id):
+    """
+    Emite NF-e Complementar (finalidade 3) referenciando a NF-e original.
+    Body: { "chave_nfe_original": "...", "motivo": "Complementação de ICMS" }
+    """
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Sem permissão para emitir NF-e Complementar.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+    chave_original = request.data.get('chave_nfe_original', '').strip()
+    motivo = request.data.get('motivo', 'Complementação de valores').strip()
+
+    if not chave_original:
+        return Response({'erro': 'Informe a chave da NF-e original (campo chave_nfe_original).'}, status=400)
+
+    from .models import PedidoVenda, ConfiguracaoFiscal
+    from .fiscal import sugerir_tributacao, calcular_impostos_item
+    import requests as req_lib
+
+    try:
+        pedido = PedidoVenda.objects.get(id=pedido_id, empresa_id=empresa_id)
+    except PedidoVenda.DoesNotExist:
+        return Response({'erro': 'Pedido não encontrado.'}, status=404)
+
+    try:
+        config = ConfiguracaoFiscal.objects.get(empresa_id=empresa_id)
+    except ConfiguracaoFiscal.DoesNotExist:
+        return Response({'erro': 'Configuração fiscal não encontrada.'}, status=400)
+
+    if not config.focusnfe_token:
+        return Response({'erro': 'Token Focus NFe não configurado.'}, status=400)
+
+    base_url = 'https://homologacao.focusnfe.com.br' if config.focusnfe_homologacao else 'https://api.focusnfe.com.br'
+
+    itens_nfe = []
+    for item in pedido.itens.all():
+        sugestao = sugerir_tributacao(empresa_id, getattr(pedido.cliente, 'endereco', None) or config.uf, item.produto)
+        impostos = calcular_impostos_item(
+            preco_unitario=item.preco_unitario, quantidade=item.quantidade,
+            regime=config.regime_tributario,
+            aliquota_icms=sugestao.get('aliquota_icms', 12),
+            cst_pis=sugestao.get('cst_pis', '07'), aliquota_pis=sugestao.get('aliquota_pis', 0),
+            cst_cofins=sugestao.get('cst_cofins', '07'), aliquota_cofins=sugestao.get('aliquota_cofins', 0),
+        )
+        itens_nfe.append({
+            'numero_item': len(itens_nfe) + 1,
+            'codigo_produto': item.produto.sku, 'descricao': item.produto.nome,
+            'ncm': item.produto.ncm or '00000000',
+            'cfop': sugestao.get('cfop_sugerido', '5102'),
+            'unidade_comercial': item.produto.unidade_medida,
+            'quantidade_comercial': float(item.quantidade),
+            'valor_unitario_comercial': float(item.preco_unitario),
+            'valor_bruto': float(impostos['subtotal']),
+            'origem': item.produto.origem,
+            'icms_situacao_tributaria': sugestao.get('csosn') or sugestao.get('cst_icms', '102'),
+            'icms_aliquota': float(sugestao.get('aliquota_icms', 0)),
+            'icms_base_calculo': float(impostos['subtotal']),
+            'icms_valor': float(impostos['valor_icms']),
+            'pis_situacao_tributaria': sugestao.get('cst_pis', '07'),
+            'pis_aliquota_percentual': float(sugestao.get('aliquota_pis', 0)),
+            'pis_base_calculo': float(impostos['subtotal']),
+            'pis_valor': float(impostos['valor_pis']),
+            'cofins_situacao_tributaria': sugestao.get('cst_cofins', '07'),
+            'cofins_aliquota_percentual': float(sugestao.get('aliquota_cofins', 0)),
+            'cofins_base_calculo': float(impostos['subtotal']),
+            'cofins_valor': float(impostos['valor_cofins']),
+        })
+
+    payload = {
+        'natureza_operacao': motivo,
+        'finalidade_emissao': '3',  # NF-e complementar
+        'tipo_documento': '1',
+        'local_destino': '1',
+        'codigo_municipio_fato_gerador': '3550308',
+        'tipo_impressao_danfe': '1',
+        'processo_emissao': '0',
+        'chave_nfe_referenciada': chave_original,
+        'cnpj_emitente': config.cnpj,
+        'nome_emitente': pedido.empresa.nome,
+        'regime_tributario_emitente': config.crt,
+        'cpf_cnpj_destinatario': pedido.cliente.cnpj_cpf,
+        'nome_destinatario': pedido.cliente.nome_razao,
+        'items': itens_nfe,
+    }
+
+    try:
+        ref = f"complementar_{pedido_id}"
+        response = req_lib.post(
+            f"{base_url}/v2/nfe?ref={ref}",
+            json=payload,
+            auth=(config.focusnfe_token, ''),
+            timeout=30,
+        )
+        data = response.json()
+    except Exception as e:
+        return Response({'erro': f'Erro de comunicação com Focus NFe: {str(e)}'}, status=500)
+
+    if response.status_code in (200, 201):
+        return Response({
+            'status': data.get('status'),
+            'chave_nfe': data.get('chave_nfe'),
+            'numero': data.get('numero'),
+            'serie': data.get('serie'),
+            'mensagem': 'NF-e Complementar enviada para processamento.',
+        })
+    return Response({'erro': data.get('mensagem', 'Erro ao emitir NF-e Complementar.')}, status=400)
+
+
+@api_view(['GET'])
+def api_contingencia_status(request):
+    """
+    Retorna status de contingência SEFAZ com cronômetro legal de 168h.
+    Usa a NF-e mais antiga em contingência como referência do prazo.
+    """
+    empresa_id = _get_empresa_id(request)
+    from .models import NotaFiscal
+
+    qs = NotaFiscal.objects.filter(empresa_id=empresa_id, status='contingencia').order_by('data_emissao')
+    total_pendentes = qs.count()
+    primeira = qs.first()
+
+    if primeira and primeira.data_emissao:
+        ativada_em = primeira.data_emissao
+        horas_desde_ativacao = (timezone.now() - ativada_em).total_seconds() / 3600
+        horas_restantes = max(0.0, 168.0 - horas_desde_ativacao)
+        modo = primeira.modo_contingencia or 'FSDA'
+        modo_display = dict(NotaFiscal.MODO_CONTINGENCIA_CHOICES).get(modo, modo)
+        return Response({
+            'sefaz_status': 'offline',
+            'contingencia_ativa': True,
+            'modo_contingencia': modo,
+            'modo_contingencia_display': modo_display,
+            'total_nfe_pendentes': total_pendentes,
+            'ativada_em': ativada_em.isoformat(),
+            'horas_desde_ativacao': round(horas_desde_ativacao, 1),
+            'horas_restantes': round(horas_restantes, 1),
+            'alerta_critico': horas_restantes < 24,
+        })
+
+    return Response({
+        'sefaz_status': 'online',
+        'contingencia_ativa': False,
+        'total_nfe_pendentes': 0,
+        'horas_restantes': None,
+    })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3237,3 +3974,704 @@ class BancoViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         empresa_id = _get_empresa_id(self.request)
         serializer.save(empresa_id=empresa_id)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COBRANÇA E CRÉDITO RURAL
+# ══════════════════════════════════════════════════════════════════════════════
+
+from .credito_cobranca import (
+    calcular_score_cliente,
+    calcular_aging_carteira,
+    painel_carteira,
+    calcular_pdd,
+    gerar_lista_cobranca_diaria,
+    gerar_pacote_juridico,
+    aprovar_ficha_credito,
+    recusar_ficha_credito,
+    registrar_snapshot_inadimplencia,
+    listar_historico_inadimplencia,
+)
+
+
+@api_view(['GET'])
+def api_credito_painel(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    return Response(painel_carteira(_get_empresa_id(request)))
+
+
+@api_view(['GET'])
+def api_credito_aging(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    return Response(calcular_aging_carteira(_get_empresa_id(request)))
+
+
+@api_view(['GET'])
+def api_credito_pdd(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    return Response(calcular_pdd(_get_empresa_id(request)))
+
+
+@api_view(['GET'])
+def api_credito_score(request, cliente_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    from .models import ScoreCredito
+    empresa_id = _get_empresa_id(request)
+    try:
+        score = ScoreCredito.objects.get(empresa_id=empresa_id, cliente_id=cliente_id)
+        return Response({
+            'cliente_id':                  cliente_id,
+            'score_total':                 float(score.score_total),
+            'classificacao':               score.classificacao,
+            'score_historico_pagamento':   float(score.score_historico_pagamento),
+            'score_tempo_relacionamento':  float(score.score_tempo_relacionamento),
+            'score_volume_compras':        float(score.score_volume_compras),
+            'score_dados_cadastrais':      float(score.score_dados_cadastrais),
+            'calculado_em':                score.calculado_em.strftime('%d/%m/%Y %H:%M'),
+        })
+    except ScoreCredito.DoesNotExist:
+        return Response({'erro': 'Score não calculado ainda. Use POST /recalcular/'}, status=404)
+
+
+@api_view(['POST'])
+def api_credito_score_recalcular(request, cliente_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    resultado, erro = calcular_score_cliente(_get_empresa_id(request), cliente_id)
+    if erro:
+        return Response({'erro': erro}, status=400)
+    return Response(resultado)
+
+
+@api_view(['GET', 'POST'])
+def api_credito_fichas(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    from .models import FichaAnaliseCredito, Cliente
+
+    if request.method == 'GET':
+        fichas = FichaAnaliseCredito.objects.filter(empresa_id=empresa_id).select_related('cliente', 'analista', 'aprovado_por')
+        return Response([{
+            'id':               f.id,
+            'cliente':          f.cliente.nome_fantasia or f.cliente.nome_razao,
+            'cliente_id':       f.cliente_id,
+            'status':           f.status,
+            'limite_solicitado': float(f.limite_solicitado),
+            'limite_aprovado':  float(f.limite_aprovado) if f.limite_aprovado else None,
+            'analista':         f.analista.nome if f.analista else None,
+            'aprovado_por':     f.aprovado_por.nome if f.aprovado_por else None,
+            'proxima_revisao':  f.proxima_revisao.strftime('%d/%m/%Y') if f.proxima_revisao else None,
+            'criado_em':        f.criado_em.strftime('%d/%m/%Y'),
+            'cultura_principal': f.cultura_principal,
+            'area_plantada_ha': float(f.area_plantada_ha) if f.area_plantada_ha else None,
+        } for f in fichas])
+
+    # POST — cria nova ficha
+    data = request.data
+    try:
+        cliente = Cliente.objects.get(id=data['cliente_id'], empresa_id=empresa_id)
+    except Cliente.DoesNotExist:
+        return Response({'erro': 'Cliente não encontrado.'}, status=404)
+
+    ficha = FichaAnaliseCredito.objects.create(
+        empresa_id=empresa_id,
+        cliente=cliente,
+        analista=request.user,
+        area_plantada_ha=data.get('area_plantada_ha'),
+        cultura_principal=data.get('cultura_principal', ''),
+        produtividade_historica=data.get('produtividade_historica', ''),
+        renda_estimada_anual=data.get('renda_estimada_anual'),
+        endividamento_declarado=data.get('endividamento_declarado', 0),
+        garantias=data.get('garantias', ''),
+        limite_solicitado=data['limite_solicitado'],
+        proxima_revisao=data.get('proxima_revisao'),
+        observacoes=data.get('observacoes', ''),
+    )
+    return Response({'id': ficha.id, 'mensagem': 'Ficha criada.'}, status=201)
+
+
+@api_view(['POST'])
+def api_credito_ficha_aprovar(request, ficha_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado. Apenas gerente ou diretor podem aprovar.'}, status=403)
+    limite = request.data.get('limite_aprovado')
+    if not limite:
+        return Response({'erro': 'Informe limite_aprovado.'}, status=400)
+    ok, resultado = aprovar_ficha_credito(
+        _get_empresa_id(request), ficha_id, request.user, limite,
+        request.data.get('observacoes', ''),
+    )
+    if not ok:
+        return Response({'erro': resultado}, status=400)
+    return Response(resultado)
+
+
+@api_view(['POST'])
+def api_credito_ficha_recusar(request, ficha_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    motivo = request.data.get('motivo', '').strip()
+    if len(motivo) < 10:
+        return Response({'erro': 'Informe o motivo (mín. 10 caracteres).'}, status=400)
+    ok, msg = recusar_ficha_credito(_get_empresa_id(request), ficha_id, request.user, motivo)
+    if not ok:
+        return Response({'erro': msg}, status=400)
+    return Response({'mensagem': msg})
+
+
+@api_view(['GET'])
+def api_credito_lista_cobranca(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    return Response(gerar_lista_cobranca_diaria(_get_empresa_id(request)))
+
+
+@api_view(['POST'])
+def api_credito_registrar_tentativa(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    from .models import TentativaCobranca, Cliente, ContaReceber
+
+    data = request.data
+    try:
+        cliente = Cliente.objects.get(id=data['cliente_id'], empresa_id=empresa_id)
+    except Cliente.DoesNotExist:
+        return Response({'erro': 'Cliente não encontrado.'}, status=404)
+
+    conta = None
+    if data.get('conta_receber_id'):
+        try:
+            conta = ContaReceber.objects.get(id=data['conta_receber_id'], empresa_id=empresa_id)
+        except ContaReceber.DoesNotExist:
+            pass
+
+    t = TentativaCobranca.objects.create(
+        empresa_id=empresa_id,
+        cliente=cliente,
+        conta_receber=conta,
+        usuario=request.user,
+        tipo_contato=data['tipo_contato'],
+        resultado=data['resultado'],
+        observacao=data.get('observacao', ''),
+        proxima_acao=data.get('proxima_acao', ''),
+        proxima_acao_data=data.get('proxima_acao_data'),
+    )
+    return Response({'id': t.id, 'mensagem': 'Tentativa registrada.'}, status=201)
+
+
+@api_view(['GET'])
+def api_credito_tentativas_cliente(request, cliente_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    from .models import TentativaCobranca
+    tentativas = TentativaCobranca.objects.filter(
+        empresa_id=_get_empresa_id(request), cliente_id=cliente_id
+    ).select_related('usuario', 'conta_receber')
+    return Response([{
+        'id':               t.id,
+        'tipo_contato':     t.get_tipo_contato_display(),
+        'resultado':        t.get_resultado_display(),
+        'observacao':       t.observacao,
+        'proxima_acao':     t.proxima_acao,
+        'proxima_acao_data': t.proxima_acao_data.strftime('%d/%m/%Y') if t.proxima_acao_data else None,
+        'usuario':          t.usuario.nome if t.usuario else None,
+        'criado_em':        t.criado_em.strftime('%d/%m/%Y %H:%M'),
+        'conta_descricao':  t.conta_receber.descricao if t.conta_receber else None,
+    } for t in tentativas])
+
+
+@api_view(['GET', 'POST'])
+def api_credito_titulos_disputa(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    from .models import TituloEmDisputa, ContaReceber
+
+    if request.method == 'GET':
+        titulos = TituloEmDisputa.objects.filter(empresa_id=empresa_id).select_related('conta_receber__cliente')
+        return Response([{
+            'id':           t.id,
+            'cliente':      t.conta_receber.cliente.nome_razao,
+            'cliente_id':   t.conta_receber.cliente_id,
+            'valor':        float(round(t.conta_receber.valor, 2)),
+            'vencimento':   t.conta_receber.data_vencimento.strftime('%d/%m/%Y'),
+            'motivo':       t.motivo,
+            'status':       t.status,
+            'status_label': t.get_status_display(),
+            'docs_gerados': t.documentos_gerados,
+            'criado_em':    t.criado_em.strftime('%d/%m/%Y'),
+        } for t in titulos])
+
+    data = request.data
+    try:
+        conta = ContaReceber.objects.get(id=data['conta_receber_id'], empresa_id=empresa_id)
+    except ContaReceber.DoesNotExist:
+        return Response({'erro': 'Conta a receber não encontrada.'}, status=404)
+
+    t = TituloEmDisputa.objects.create(
+        empresa_id=empresa_id,
+        conta_receber=conta,
+        usuario=request.user,
+        motivo=data.get('motivo', ''),
+    )
+    return Response({'id': t.id, 'mensagem': 'Título marcado como em disputa.'}, status=201)
+
+
+@api_view(['POST'])
+def api_credito_titulo_resolver(request, titulo_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    from .models import TituloEmDisputa
+    try:
+        titulo = TituloEmDisputa.objects.get(id=titulo_id, empresa_id=_get_empresa_id(request))
+    except TituloEmDisputa.DoesNotExist:
+        return Response({'erro': 'Título não encontrado.'}, status=404)
+    resolucao = request.data.get('resolucao', 'resolvido_pago')
+    titulo.status = resolucao
+    titulo.resolvido_em = timezone.now()
+    titulo.save(update_fields=['status', 'resolvido_em'])
+    return Response({'mensagem': 'Título resolvido.'})
+
+
+@api_view(['POST'])
+def api_credito_titulo_juridico(request, titulo_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    pacote, erro = gerar_pacote_juridico(_get_empresa_id(request), titulo_id)
+    if erro:
+        return Response({'erro': erro}, status=404)
+    return Response(pacote)
+
+
+@api_view(['GET', 'POST'])
+def api_credito_acordos(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    from .models import AcordoJudicial, ParcelaAcordoJudicial, Cliente, TituloEmDisputa
+    from datetime import date, timedelta
+
+    if request.method == 'GET':
+        acordos = AcordoJudicial.objects.filter(empresa_id=empresa_id).select_related('cliente')
+        resultado = []
+        for a in acordos:
+            parcelas_pagas = a.parcelas.filter(status='paga').count()
+            resultado.append({
+                'id':              a.id,
+                'cliente':         a.cliente.nome_fantasia or a.cliente.nome_razao,
+                'cliente_id':      a.cliente_id,
+                'valor_total':     float(round(a.valor_total, 2)),
+                'numero_parcelas': a.numero_parcelas,
+                'parcelas_pagas':  parcelas_pagas,
+                'status':          a.status,
+                'status_label':    a.get_status_display(),
+                'criado_em':       a.criado_em.strftime('%d/%m/%Y'),
+            })
+        return Response(resultado)
+
+    data = request.data
+    try:
+        cliente = Cliente.objects.get(id=data['cliente_id'], empresa_id=empresa_id)
+    except Cliente.DoesNotExist:
+        return Response({'erro': 'Cliente não encontrado.'}, status=404)
+
+    titulo = None
+    if data.get('titulo_disputa_id'):
+        try:
+            titulo = TituloEmDisputa.objects.get(id=data['titulo_disputa_id'], empresa_id=empresa_id)
+        except TituloEmDisputa.DoesNotExist:
+            pass
+
+    valor_total     = Decimal(str(data['valor_total']))
+    num_parcelas    = int(data['numero_parcelas'])
+    valor_parcela   = (valor_total / num_parcelas).quantize(Decimal('0.01'))
+    data_primeira   = date.fromisoformat(data.get('data_primeira_parcela', date.today().isoformat()))
+
+    acordo = AcordoJudicial.objects.create(
+        empresa_id=empresa_id,
+        cliente=cliente,
+        titulo_disputa=titulo,
+        valor_total=valor_total,
+        numero_parcelas=num_parcelas,
+        observacoes=data.get('observacoes', ''),
+    )
+
+    for i in range(num_parcelas):
+        ParcelaAcordoJudicial.objects.create(
+            acordo=acordo,
+            numero=i + 1,
+            valor=valor_parcela,
+            data_vencimento=data_primeira + timedelta(days=30 * i),
+        )
+
+    return Response({'id': acordo.id, 'mensagem': f'Acordo criado com {num_parcelas} parcelas.'}, status=201)
+
+
+@api_view(['GET'])
+def api_credito_acordo_parcelas(request, acordo_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    from .models import AcordoJudicial
+    try:
+        acordo = AcordoJudicial.objects.get(id=acordo_id, empresa_id=_get_empresa_id(request))
+    except AcordoJudicial.DoesNotExist:
+        return Response({'erro': 'Acordo não encontrado.'}, status=404)
+    hoje = timezone.now().date()
+    return Response([{
+        'id':              p.id,
+        'numero':          p.numero,
+        'valor':           float(round(p.valor, 2)),
+        'data_vencimento': p.data_vencimento.strftime('%d/%m/%Y'),
+        'data_pagamento':  p.data_pagamento.strftime('%d/%m/%Y') if p.data_pagamento else None,
+        'status':          p.status,
+        'atrasada':        p.status == 'pendente' and p.data_vencimento < hoje,
+    } for p in acordo.parcelas.all()])
+
+
+@api_view(['POST'])
+def api_credito_parcela_pagar(request, acordo_id, parcela_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    from .models import AcordoJudicial, ParcelaAcordoJudicial
+    try:
+        parcela = ParcelaAcordoJudicial.objects.get(
+            id=parcela_id, acordo_id=acordo_id,
+            acordo__empresa_id=_get_empresa_id(request),
+        )
+    except ParcelaAcordoJudicial.DoesNotExist:
+        return Response({'erro': 'Parcela não encontrada.'}, status=404)
+    parcela.status = 'paga'
+    parcela.data_pagamento = timezone.now().date()
+    parcela.save(update_fields=['status', 'data_pagamento'])
+    # Verifica se todas as parcelas foram pagas
+    acordo = parcela.acordo
+    if not acordo.parcelas.exclude(status='paga').exists():
+        acordo.status = 'cumprido'
+        acordo.save(update_fields=['status'])
+    return Response({'mensagem': 'Parcela marcada como paga.'})
+
+
+@api_view(['GET', 'POST'])
+def api_credito_configuracao(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor']:
+        return Response({'erro': 'Apenas o Diretor pode alterar as configurações de crédito.'}, status=403)
+    from .models import ConfiguracaoCreditoCobranca, Empresa
+    empresa_id = _get_empresa_id(request)
+
+    try:
+        empresa = Empresa.objects.get(id=empresa_id)
+    except Empresa.DoesNotExist:
+        return Response({'erro': 'Empresa não encontrada.'}, status=404)
+
+    config, _ = ConfiguracaoCreditoCobranca.objects.get_or_create(empresa=empresa)
+
+    if request.method == 'GET':
+        return Response({
+            'dias_atraso_bloqueio':       config.dias_atraso_bloqueio,
+            'limite_alcada_gerente':      float(config.limite_alcada_gerente),
+            'limite_alcada_diretor':      float(config.limite_alcada_diretor),
+            'peso_historico_pagamento':   config.peso_historico_pagamento,
+            'peso_tempo_relacionamento':  config.peso_tempo_relacionamento,
+            'peso_volume_compras':        config.peso_volume_compras,
+            'peso_dados_cadastrais':      config.peso_dados_cadastrais,
+            'pct_concentracao_alerta':    float(config.pct_concentracao_alerta),
+            'pdd_1_30_dias':              float(config.pdd_1_30_dias),
+            'pdd_31_60_dias':             float(config.pdd_31_60_dias),
+            'pdd_61_90_dias':             float(config.pdd_61_90_dias),
+            'pdd_91_180_dias':            float(config.pdd_91_180_dias),
+            'pdd_acima_180_dias':         float(config.pdd_acima_180_dias),
+        })
+
+    data = request.data
+    for campo in [
+        'dias_atraso_bloqueio', 'limite_alcada_gerente', 'limite_alcada_diretor',
+        'peso_historico_pagamento', 'peso_tempo_relacionamento',
+        'peso_volume_compras', 'peso_dados_cadastrais',
+        'pct_concentracao_alerta',
+        'pdd_1_30_dias', 'pdd_31_60_dias', 'pdd_61_90_dias',
+        'pdd_91_180_dias', 'pdd_acima_180_dias',
+    ]:
+        if campo in data:
+            setattr(config, campo, data[campo])
+    config.save()
+    return Response({'mensagem': 'Configurações salvas.'})
+
+
+@api_view(['GET'])
+def api_credito_historico_inadimplencia(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    meses = int(request.query_params.get('meses', 12))
+    return Response(listar_historico_inadimplencia(_get_empresa_id(request), meses=meses))
+
+
+@api_view(['POST'])
+def api_credito_snapshot_inadimplencia(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    _, criado = registrar_snapshot_inadimplencia(_get_empresa_id(request))
+    return Response({'mensagem': 'Snapshot registrado.', 'criado': criado})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONTRATOS AGRÍCOLAS — CPR, BARTER, TERMO
+# ══════════════════════════════════════════════════════════════════════════════
+
+from .contratos import (
+    listar_cprs, registrar_entrega_cpr, liquidar_cpr_financeira, alertas_cpr,
+    listar_barters, registrar_entrega_barter,
+    listar_termos, formalizar_entrega_termo, painel_termos_por_safra,
+    alertas_contratos, consultar_preco_mercado,
+)
+
+
+def _nivel_contrato(nivel):
+    return nivel in ['diretor', 'gerente', 'administrativo', 'vendedor']
+
+
+# ── CPR ───────────────────────────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+def api_cprs(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    if request.method == 'GET':
+        status = request.query_params.get('status')
+        return Response(listar_cprs(empresa_id, status=status))
+    data = request.data
+    from .models import CPR, Cliente, Produto, PedidoVenda
+    try:
+        emitente = Cliente.objects.get(id=data['emitente_id'], empresa_id=empresa_id)
+        produto  = Produto.objects.get(id=data['produto_id'], empresa_id=empresa_id)
+    except (Cliente.DoesNotExist, Produto.DoesNotExist) as e:
+        return Response({'erro': str(e)}, status=400)
+    pedido = None
+    if data.get('pedido_venda_id'):
+        pedido = PedidoVenda.objects.filter(id=data['pedido_venda_id'], empresa_id=empresa_id).first()
+    cpr = CPR.objects.create(
+        empresa_id=empresa_id,
+        numero=data['numero'],
+        emitente=emitente,
+        produto=produto,
+        quantidade_sacas=data['quantidade_sacas'],
+        qualidade_minima=data.get('qualidade_minima', ''),
+        local_entrega=data.get('local_entrega', ''),
+        data_emissao=data['data_emissao'],
+        data_vencimento=data['data_vencimento'],
+        valor_credito=data['valor_credito'],
+        garantias=data.get('garantias', ''),
+        pedido_venda=pedido,
+        observacoes=data.get('observacoes', ''),
+    )
+    return Response({'id': cpr.id, 'mensagem': 'CPR criada.'}, status=201)
+
+
+@api_view(['POST'])
+def api_cpr_entregar(request, cpr_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    data = request.data
+    resultado, erro = registrar_entrega_cpr(
+        _get_empresa_id(request), cpr_id,
+        data['data_entrega'], data['quantidade'],
+        data.get('nota_fiscal', ''), data.get('observacoes', ''),
+    )
+    if erro:
+        return Response({'erro': erro}, status=400)
+    return Response(resultado)
+
+
+@api_view(['POST'])
+def api_cpr_liquidar_financeira(request, cpr_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    data = request.data
+    resultado, erro = liquidar_cpr_financeira(
+        _get_empresa_id(request), cpr_id,
+        data['preco_mercado'], data.get('fonte_preco', 'manual'),
+    )
+    if erro:
+        return Response({'erro': erro}, status=400)
+    return Response(resultado)
+
+
+@api_view(['GET'])
+def api_cpr_alertas(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    return Response(alertas_cpr(_get_empresa_id(request)))
+
+
+@api_view(['GET'])
+def api_cotacao_mercado(request):
+    produto = request.query_params.get('produto', '')
+    fonte   = request.query_params.get('fonte', 'cbot')
+    preco, erro = consultar_preco_mercado(produto, fonte)
+    return Response({'preco': preco, 'fonte': fonte, 'erro': erro})
+
+
+# ── BARTER ────────────────────────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+def api_barters(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    if request.method == 'GET':
+        status = request.query_params.get('status')
+        return Response(listar_barters(empresa_id, status=status))
+    data = request.data
+    from .models import ContratosBarter, Cliente, Produto
+    try:
+        produtor        = Cliente.objects.get(id=data['produtor_id'], empresa_id=empresa_id)
+        produto_receber = Produto.objects.get(id=data['produto_receber_id'], empresa_id=empresa_id)
+    except (Cliente.DoesNotExist, Produto.DoesNotExist) as e:
+        return Response({'erro': str(e)}, status=400)
+    contrato = ContratosBarter.objects.create(
+        empresa_id=empresa_id,
+        numero=data['numero'],
+        produtor=produtor,
+        produto_receber=produto_receber,
+        safra=data.get('safra', ''),
+        quantidade_sacas=data['quantidade_sacas'],
+        preco_referencia_manual=data.get('preco_referencia_manual'),
+        fonte_preco_referencia=data.get('fonte_preco_referencia', 'manual'),
+        data_contrato=data['data_contrato'],
+        data_entrega_prevista=data['data_entrega_prevista'],
+        valor_insumos=data.get('valor_insumos', 0),
+        observacoes=data.get('observacoes', ''),
+    )
+    return Response({'id': contrato.id, 'mensagem': 'Contrato Barter criado.'}, status=201)
+
+
+@api_view(['POST'])
+def api_barter_entregar(request, contrato_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    data = request.data
+    resultado, erro = registrar_entrega_barter(
+        _get_empresa_id(request), contrato_id,
+        data['data_entrega'], data['quantidade'],
+        data['preco_entrega_manual'],
+        data.get('fonte_preco', 'manual'),
+        data.get('nota_fiscal', ''), data.get('observacoes', ''),
+    )
+    if erro:
+        return Response({'erro': erro}, status=400)
+    return Response(resultado)
+
+
+# ── CONTRATO A TERMO ──────────────────────────────────────────────────────────
+
+@api_view(['GET', 'POST'])
+def api_termos(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    empresa_id = _get_empresa_id(request)
+    if request.method == 'GET':
+        status = request.query_params.get('status')
+        return Response(listar_termos(empresa_id, status=status))
+    data = request.data
+    from .models import ContratoTermo, Cliente, Produto
+    produto = Produto.objects.filter(id=data['produto_id'], empresa_id=empresa_id).first()
+    if not produto:
+        return Response({'erro': 'Produto não encontrado.'}, status=400)
+    contraparte = Cliente.objects.filter(id=data.get('contraparte_id'), empresa_id=empresa_id).first() if data.get('contraparte_id') else None
+    termo = ContratoTermo.objects.create(
+        empresa_id=empresa_id,
+        numero=data['numero'],
+        tipo=data['tipo'],
+        contraparte=contraparte,
+        contraparte_nome=data.get('contraparte_nome', ''),
+        produto=produto,
+        quantidade=data['quantidade'],
+        preco_travado=data['preco_travado'],
+        data_contrato=data['data_contrato'],
+        data_entrega=data['data_entrega'],
+        safra=data.get('safra', ''),
+        observacoes=data.get('observacoes', ''),
+    )
+    return Response({'id': termo.id, 'mensagem': 'Contrato a termo criado.'}, status=201)
+
+
+@api_view(['POST'])
+def api_termo_atualizar_preco(request, termo_id):
+    """Atualiza preço de mercado para cálculo de exposição."""
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    from .models import ContratoTermo
+    try:
+        termo = ContratoTermo.objects.get(id=termo_id, empresa_id=_get_empresa_id(request))
+    except ContratoTermo.DoesNotExist:
+        return Response({'erro': 'Contrato não encontrado.'}, status=404)
+    data = request.data
+    termo.preco_mercado_manual = data.get('preco_mercado_manual')
+    termo.fonte_preco_mercado  = data.get('fonte_preco_mercado', 'manual')
+    termo.save(update_fields=['preco_mercado_manual', 'fonte_preco_mercado'])
+    return Response({'exposicao_mercado': termo.exposicao_mercado()})
+
+
+@api_view(['POST'])
+def api_termo_entregar(request, termo_id):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    data = request.data
+    resultado, erro = formalizar_entrega_termo(
+        _get_empresa_id(request), termo_id,
+        data['data_entrega'], data['quantidade'], data['preco_entrega'],
+        data.get('nota_fiscal', ''), data.get('observacoes', ''),
+    )
+    if erro:
+        return Response({'erro': erro}, status=400)
+    return Response(resultado)
+
+
+@api_view(['GET'])
+def api_termos_painel_safra(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    return Response(painel_termos_por_safra(_get_empresa_id(request)))
+
+
+@api_view(['GET'])
+def api_contratos_alertas(request):
+    nivel = getattr(request.user, 'nivel', None)
+    if not _nivel_contrato(nivel):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+    return Response(alertas_contratos(_get_empresa_id(request)))

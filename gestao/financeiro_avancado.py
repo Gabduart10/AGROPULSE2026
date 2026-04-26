@@ -559,67 +559,168 @@ def painel_superhost():
     ]
 
 
+def _indicadores_empresa(emp, hoje, primeiro_mes):
+    """Calcula todos os indicadores de uma empresa para o consolidado da matriz."""
+    from .models import PedidoVenda, ContaReceber, ContaPagar, Produto
+    from django.db.models import Sum, Count, F
+
+    pedidos_mes_qs = PedidoVenda.objects.filter(
+        empresa=emp, status='faturado', data_pedido__date__gte=primeiro_mes
+    )
+    fat_agg = pedidos_mes_qs.aggregate(total=Sum('valor_total'), qtd=Count('id'))
+    faturamento_mes = fat_agg['total'] or Decimal('0')
+    pedidos_mes_qtd = fat_agg['qtd'] or 0
+    ticket_medio = (faturamento_mes / pedidos_mes_qtd) if pedidos_mes_qtd else Decimal('0')
+
+    pedidos_abertos = PedidoVenda.objects.filter(
+        empresa=emp, status__in=['aguardando', 'aprovado']
+    ).count()
+
+    a_receber = ContaReceber.objects.filter(
+        empresa=emp, status='pendente'
+    ).aggregate(total=Sum('valor'))['total'] or Decimal('0')
+
+    inadimplencia = ContaReceber.objects.filter(
+        empresa=emp, status__in=['pendente', 'inadimplente', 'atrasado'], data_vencimento__lt=hoje
+    ).aggregate(total=Sum('valor'))['total'] or Decimal('0')
+
+    a_pagar = ContaPagar.objects.filter(
+        empresa=emp, status='pendente'
+    ).aggregate(total=Sum('valor'))['total'] or Decimal('0')
+
+    estoque_valor = Produto.objects.filter(empresa=emp).aggregate(
+        total=Sum(F('quantidade') * F('preco_custo'))
+    )['total'] or Decimal('0')
+
+    return {
+        'faturamento_mes':  float(faturamento_mes),
+        'pedidos_mes':      pedidos_mes_qtd,
+        'pedidos_abertos':  pedidos_abertos,
+        'ticket_medio':     float(ticket_medio),
+        'a_receber':        float(a_receber),
+        'inadimplencia':    float(inadimplencia),
+        'a_pagar':          float(a_pagar),
+        'saldo_liquido':    float(a_receber - a_pagar),
+        'estoque_valor':    float(estoque_valor),
+    }
+
+
 def consolidado_matriz(empresa_matriz_id):
     """
     Retorna métricas consolidadas de uma matriz e todas suas filiais.
     Apenas leitura — nunca altera dados das filiais.
     """
-    from .models import Empresa, PedidoVenda, ContaReceber, ContaPagar, Produto
-    from django.db.models import Sum, Q
+    from .models import Empresa
+    from django.db.models import Sum
 
     try:
         matriz = Empresa.objects.get(id=empresa_matriz_id)
     except Empresa.DoesNotExist:
         return None
 
-    filiais = list(matriz.filiais.all())
+    filiais        = list(matriz.filiais.all())
     todas_empresas = [matriz] + filiais
-    ids = [e.id for e in todas_empresas]
+    hoje           = date.today()
+    primeiro_mes   = date(hoje.year, hoje.month, 1)
 
-    hoje = date.today()
-    primeiro_mes = date(hoje.year, hoje.month, 1)
-
-    faturamento_mes = PedidoVenda.objects.filter(
-        empresa_id__in=ids,
-        status='faturado',
-        data_pedido__date__gte=primeiro_mes,
-    ).aggregate(total=Sum('valor_total'))['total'] or Decimal('0')
-
-    a_receber = ContaReceber.objects.filter(
-        empresa_id__in=ids, status='pendente'
-    ).aggregate(total=Sum('valor'))['total'] or Decimal('0')
-
-    a_pagar = ContaPagar.objects.filter(
-        empresa_id__in=ids, status='pendente'
-    ).aggregate(total=Sum('valor'))['total'] or Decimal('0')
-
-    inadimplente = ContaReceber.objects.filter(
-        empresa_id__in=ids,
-        status='pendente',
-        data_vencimento__lt=hoje,
-    ).aggregate(total=Sum('valor'))['total'] or Decimal('0')
-
-    unidades = []
+    por_unidade = []
     for emp in todas_empresas:
-        fat = PedidoVenda.objects.filter(
-            empresa=emp, status='faturado', data_pedido__date__gte=primeiro_mes
-        ).aggregate(total=Sum('valor_total'))['total'] or Decimal('0')
-        unidades.append({
-            'id':           emp.id,
-            'nome':         emp.nome,
-            'is_matriz':    emp.id == empresa_matriz_id,
-            'faturamento_mes': float(fat),
+        indicadores = _indicadores_empresa(emp, hoje, primeiro_mes)
+        por_unidade.append({
+            'id':        emp.id,
+            'nome':      emp.nome,
+            'cnpj':      emp.cnpj,
+            'tipo':      emp.get_tipo_negocio_display(),
+            'is_matriz': emp.id == empresa_matriz_id,
+            **indicadores,
         })
 
+    def soma(campo):
+        return sum(u[campo] for u in por_unidade)
+
     return {
-        'matriz': matriz.nome,
+        'matriz':         matriz.nome,
         'total_unidades': len(todas_empresas),
         'consolidado': {
-            'faturamento_mes':   float(faturamento_mes),
-            'a_receber':         float(a_receber),
-            'a_pagar':           float(a_pagar),
-            'inadimplencia':     float(inadimplente),
-            'saldo_liquido':     float(a_receber - a_pagar),
+            'faturamento_mes': soma('faturamento_mes'),
+            'pedidos_mes':     soma('pedidos_mes'),
+            'pedidos_abertos': soma('pedidos_abertos'),
+            'ticket_medio':    (soma('faturamento_mes') / soma('pedidos_mes')) if soma('pedidos_mes') else 0,
+            'a_receber':       soma('a_receber'),
+            'inadimplencia':   soma('inadimplencia'),
+            'a_pagar':         soma('a_pagar'),
+            'saldo_liquido':   soma('a_receber') - soma('a_pagar'),
+            'estoque_valor':   soma('estoque_valor'),
         },
-        'por_unidade': unidades,
+        'por_unidade': por_unidade,
+    }
+
+
+def detalhe_filial(empresa_matriz_id, filial_id):
+    """
+    Retorna indicadores detalhados de uma filial específica.
+    Valida que a filial pertence à matriz antes de retornar dados.
+    """
+    from .models import Empresa, PedidoVenda, ContaReceber, ContaPagar
+    from django.db.models import Sum
+
+    try:
+        filial = Empresa.objects.get(id=filial_id)
+    except Empresa.DoesNotExist:
+        return None
+
+    # Garante que a filial pertence à matriz solicitante
+    if filial.empresa_matriz_id != empresa_matriz_id and filial.id != empresa_matriz_id:
+        return None
+
+    hoje         = date.today()
+    primeiro_mes = date(hoje.year, hoje.month, 1)
+    indicadores  = _indicadores_empresa(filial, hoje, primeiro_mes)
+
+    # Últimos 5 pedidos faturados
+    ultimos_pedidos = list(
+        PedidoVenda.objects.filter(empresa=filial, status='faturado')
+        .order_by('-data_pedido')
+        .values('id', 'cliente__nome_razao', 'valor_total', 'data_pedido')[:5]
+    )
+    for p in ultimos_pedidos:
+        p['valor_total']  = float(p['valor_total'])
+        p['data_pedido']  = p['data_pedido'].strftime('%d/%m/%Y') if p['data_pedido'] else None
+        p['cliente']      = p.pop('cliente__nome_razao', '—')
+
+    # Contas a receber vencidas (top 5)
+    atrasados = list(
+        ContaReceber.objects.filter(empresa=filial, status__in=['pendente', 'inadimplente', 'atrasado'], data_vencimento__lt=hoje)
+        .order_by('data_vencimento')
+        .values('descricao', 'cliente__nome_razao', 'valor', 'data_vencimento')[:5]
+    )
+    for a in atrasados:
+        a['valor']      = float(a['valor'])
+        a['vencimento'] = a.pop('data_vencimento').strftime('%d/%m/%Y')
+        a['cliente']    = a.pop('cliente__nome_razao', '—')
+
+    # Contas a pagar vencendo em 7 dias
+    prox_venc = list(
+        ContaPagar.objects.filter(
+            empresa=filial, status='pendente',
+            data_vencimento__lte=hoje + timedelta(days=7)
+        )
+        .order_by('data_vencimento')
+        .values('descricao', 'fornecedor__nome_razao', 'valor', 'data_vencimento')[:5]
+    )
+    for c in prox_venc:
+        c['valor']      = float(c['valor'])
+        c['vencimento'] = c.pop('data_vencimento').strftime('%d/%m/%Y')
+        c['fornecedor'] = c.pop('fornecedor__nome_razao', '—')
+
+    return {
+        'id':              filial.id,
+        'nome':            filial.nome,
+        'cnpj':            filial.cnpj,
+        'tipo':            filial.get_tipo_negocio_display(),
+        'is_matriz':       filial.id == empresa_matriz_id,
+        **indicadores,
+        'ultimos_pedidos': ultimos_pedidos,
+        'inadimplentes':   atrasados,
+        'contas_vencer':   prox_venc,
     }

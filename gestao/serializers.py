@@ -6,7 +6,7 @@ from .models import (
     GrupoCliente, TabelaPreco, ItemTabelaPreco,
     Veiculo, Fazenda, Gleba, Talhao,
     DevolucaoVenda, ItemDevolucaoVenda,
-    Banco,
+    Banco, LogAuditoria,
 )
 
 
@@ -262,3 +262,20 @@ class BancoSerializer(serializers.ModelSerializer):
             'id', 'empresa', 'nome', 'agencia', 'conta',
             'tipo_conta', 'tipo_conta_display', 'saldo_inicial', 'ativo',
         ]
+
+
+class LogAuditoriaSerializer(serializers.ModelSerializer):
+    usuario_nome = serializers.SerializerMethodField()
+    acao_display = serializers.CharField(source='get_acao_display', read_only=True)
+
+    class Meta:
+        model = LogAuditoria
+        fields = [
+            'id', 'empresa', 'usuario', 'usuario_nome',
+            'acao', 'acao_display', 'modelo_afetado', 'registro_id',
+            'campo_alterado', 'valor_anterior', 'valor_novo',
+            'descricao', 'ip_address', 'data_hora',
+        ]
+
+    def get_usuario_nome(self, obj):
+        return getattr(obj.usuario, 'nome', None) if obj.usuario else None

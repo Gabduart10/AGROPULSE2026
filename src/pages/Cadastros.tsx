@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Plus, Search, Pencil, Trash2, X, ChevronDown, Upload } from 'lucide-react'
 import { api } from '../lib/api'
 import ExportButtons from '../components/ExportButtons'
@@ -146,7 +147,7 @@ const UFS = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','P
 interface Produto {
   id: number; nome: string; sku: string; ean: string; tipo_produto: string
   tipo_produto_label: string; metodo_custeio: string; unidade_medida: string
-  preco_venda: number; quantidade: number; ncm: string; ativo: boolean
+  preco_venda: number; quantidade: number; comissao_percentual?: number; ncm: string; ativo: boolean
 }
 
 function TabProdutos() {
@@ -173,13 +174,18 @@ function TabProdutos() {
   }
 
   function openNew() { setEditing(null); setForm({ nome:'',sku:'',ean:'',tipo_produto:'insumo_agricola',metodo_custeio:'cmp',unidade_medida:'KG',preco_venda:'',estoque_minimo:'',margem_minima:'',comissao_percentual:'',ncm:'',cest:'',origem:'0',ativo:true }); setModal(true) }
-  function openEdit(r: Produto) { setEditing(r); setForm({ nome:r.nome,sku:r.sku,ean:r.ean,tipo_produto:r.tipo_produto,metodo_custeio:r.metodo_custeio,unidade_medida:r.unidade_medida,preco_venda:String(r.preco_venda),estoque_minimo:'',margem_minima:'',comissao_percentual:'',ncm:r.ncm,cest:'',origem:'0',ativo:r.ativo }); setModal(true) }
+  function openEdit(r: Produto) { setEditing(r); setForm({ nome:r.nome,sku:r.sku,ean:r.ean,tipo_produto:r.tipo_produto,metodo_custeio:r.metodo_custeio,unidade_medida:r.unidade_medida,preco_venda:String(r.preco_venda),estoque_minimo:'',margem_minima:'',comissao_percentual:String(r.comissao_percentual ?? ''),ncm:r.ncm,cest:'',origem:'0',ativo:r.ativo }); setModal(true) }
 
   async function save() {
     setSaving(true)
     try {
-      if (editing) await api.patch(`/api/produtos/${editing.id}/`, form)
-      else await api.post('/api/produtos/', form)
+      const payload = { ...form }
+      if (payload.comissao_percentual === '') {
+        if (editing) payload.comissao_percentual = null
+        else delete payload.comissao_percentual
+      }
+      if (editing) await api.patch(`/api/produtos/${editing.id}/`, payload)
+      else await api.post('/api/produtos/', payload)
       setModal(false); fetch()
     } catch { alert('Erro ao salvar') } finally { setSaving(false) }
   }
@@ -221,9 +227,9 @@ function TabProdutos() {
         ))}
       </div>
 
-      <Table heads={['SKU', 'EAN', 'Nome', 'Tipo', 'Custeio', 'Unid.', 'Preço', 'Estoque', 'Status']}
+      <Table heads={['SKU', 'EAN', 'Nome', 'Tipo', 'Custeio', 'Comissão', 'Unid.', 'Preço', 'Estoque', 'Status']}
         selHead={<input type="checkbox" className="accent-accent w-3.5 h-3.5 cursor-pointer" checked={selP.size === filtered.length && filtered.length > 0} onChange={() => toggleAllP(filtered.map(r => r.id))} />}>
-        {filtered.length === 0 ? <Empty cols={10} /> : filtered.map(r => (
+        {filtered.length === 0 ? <Empty cols={11} /> : filtered.map(r => (
           <Tr key={r.id} selected={selP.has(r.id)}>
             <td className="px-3 py-3"><input type="checkbox" className="accent-accent w-3.5 h-3.5 cursor-pointer" checked={selP.has(r.id)} onChange={() => toggleSelP(r.id)} /></td>
             <Td mono>{r.sku}</Td>
@@ -231,6 +237,7 @@ function TabProdutos() {
             <TdMain>{r.nome}</TdMain>
             <Td>{r.tipo_produto_label || tiposMap[r.tipo_produto]}</Td>
             <Td>{r.metodo_custeio?.toUpperCase()}</Td>
+            <Td mono>{r.comissao_percentual != null ? `${Number(r.comissao_percentual).toFixed(2)}%` : '—'}</Td>
             <Td>{r.unidade_medida}</Td>
             <Td mono>R$ {Number(r.preco_venda).toFixed(2)}</Td>
             <Td mono>{r.quantidade}</Td>
@@ -1104,7 +1111,9 @@ const MOCK_TABELAS = [
 const TABS = ['Produtos', 'Clientes', 'Fornecedores', 'Transportadoras', 'Colaboradores', 'Veículos', 'Fazendas', 'Tabelas de Preço', 'Tabelas Auxiliares']
 
 export default function Cadastros() {
-  const [tab, setTab] = useState('Produtos')
+  const location = useLocation()
+  const tabInicial = (location.state as { tab?: string } | null)?.tab ?? 'Produtos'
+  const [tab, setTab] = useState(TABS.includes(tabInicial) ? tabInicial : 'Produtos')
 
   return (
     <div>

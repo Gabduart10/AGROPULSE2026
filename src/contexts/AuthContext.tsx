@@ -17,7 +17,7 @@ export interface User {
 interface AuthCtx {
   user: User | null
   loading: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string, totpCode?: string) => Promise<'ok' | 'requires_2fa'>
   logout: () => Promise<void>
 }
 
@@ -47,9 +47,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // DEV: aceita qualquer credencial
-  async function login(_email: string, _password: string) {
+  async function login(_email: string, _password: string, _totpCode?: string): Promise<'ok' | 'requires_2fa'> {
     localStorage.setItem('user_data', JSON.stringify(MOCK_USER))
     setUser(MOCK_USER)
+    return 'ok'
   }
 
   async function logout() {

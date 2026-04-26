@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useAuth } from '../contexts/AuthContext'
 import {
   Plus, Search, X, ChevronDown, Leaf, MapPin, BookOpen,
   Tractor, BarChart2, Wifi, WifiOff, CheckCircle2, Clock,
@@ -1109,11 +1110,243 @@ function TabCusteio() {
   )
 }
 
+// ─── Tab OEE de Campo ─────────────────────────────────────────────────────────
+
+const MOCK_OEE_CAMPO = [
+  { equipamento: 'Pulverizador Automotriz Apache', tipo: 'Pulverizador', horas_disponiveis: 180, horas_operando: 154, area_coberta_ha: 2340, area_planejada_ha: 2500, paradas_h: 26, disponibilidade: 85.6, performance: 93.6, qualidade: 97.2, oee: 77.8 },
+  { equipamento: 'Plantadeira John Deere 2115',   tipo: 'Plantadeira',  horas_disponiveis: 120, horas_operando: 108, area_coberta_ha: 980,  area_planejada_ha: 1000, paradas_h: 12, disponibilidade: 90.0, performance: 98.0, qualidade: 99.5, oee: 87.7 },
+  { equipamento: 'Colhedora Case IH 8250',         tipo: 'Colhedora',    horas_disponiveis: 200, horas_operando: 162, area_coberta_ha: 1620, area_planejada_ha: 2000, paradas_h: 38, disponibilidade: 81.0, performance: 81.0, qualidade: 96.8, oee: 63.5 },
+  { equipamento: 'Trator Massey Ferguson 7726',    tipo: 'Trator',       horas_disponiveis: 300, horas_operando: 271, area_coberta_ha: 0,    area_planejada_ha: 0,    paradas_h: 29, disponibilidade: 90.3, performance: 88.0, qualidade: 99.0, oee: 78.6 },
+]
+
+function GaugeRing({ value, label, color }: { value: number; label: string; color: string }) {
+  const pct = Math.min(100, Math.max(0, value))
+  const r = 32, circ = 2 * Math.PI * r
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <div className="relative w-20 h-20">
+        <svg viewBox="0 0 80 80" className="w-full h-full -rotate-90">
+          <circle cx="40" cy="40" r={r} fill="none" stroke="currentColor" strokeWidth="7" className="text-border" />
+          <circle cx="40" cy="40" r={r} fill="none" stroke={color} strokeWidth="7"
+            strokeDasharray={`${(pct / 100) * circ} ${circ}`} strokeLinecap="round" />
+        </svg>
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-base font-bold font-mono text-text-primary">{pct.toFixed(0)}%</span>
+        </div>
+      </div>
+      <p className="text-xs text-text-muted text-center">{label}</p>
+    </div>
+  )
+}
+
+function TabOEECampo() {
+  const [sel, setSel] = useState<string>('todos')
+  const rows = sel === 'todos' ? MOCK_OEE_CAMPO : MOCK_OEE_CAMPO.filter(r => r.tipo === sel)
+  const tipos = ['todos', ...Array.from(new Set(MOCK_OEE_CAMPO.map(r => r.tipo)))]
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3 flex-wrap">
+        <p className="text-sm text-text-muted">Eficiência do maquinário agrícola na safra atual</p>
+        <div className="flex-1" />
+        <select value={sel} onChange={e => setSel(e.target.value)}
+          className="bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent">
+          {tipos.map(t => <option key={t} value={t}>{t === 'todos' ? 'Todos os tipos' : t}</option>)}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4">
+        {rows.map(eq => (
+          <div key={eq.equipamento} className="bg-card border border-border rounded-xl p-5">
+            <div className="flex flex-col lg:flex-row lg:items-center gap-6">
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-semibold text-text-primary">{eq.equipamento}</p>
+                <p className="text-xs text-text-muted mt-0.5">{eq.tipo}</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+                  {[
+                    { label: 'Horas Disponíveis', val: `${eq.horas_disponiveis}h` },
+                    { label: 'Horas Operando',    val: `${eq.horas_operando}h` },
+                    { label: 'Paradas',            val: `${eq.paradas_h}h` },
+                    { label: 'Área Coberta',       val: eq.area_coberta_ha > 0 ? `${eq.area_coberta_ha} ha` : '—' },
+                  ].map(k => (
+                    <div key={k.label} className="bg-card2 rounded-lg px-3 py-2">
+                      <p className="text-xs text-text-muted">{k.label}</p>
+                      <p className="text-sm font-bold font-mono text-text-primary mt-0.5">{k.val}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-6 lg:border-l lg:border-border lg:pl-6">
+                <div className="text-center">
+                  <p className="text-xs text-text-muted mb-1">OEE</p>
+                  <p className={`text-3xl font-bold font-mono ${eq.oee >= 85 ? 'text-accent' : eq.oee >= 65 ? 'text-yellow-500' : 'text-red-400'}`}>
+                    {eq.oee}%
+                  </p>
+                  <p className="text-xs text-text-muted mt-0.5">
+                    {eq.oee >= 85 ? 'Excelente' : eq.oee >= 65 ? 'Aceitável' : 'Abaixo'}
+                  </p>
+                </div>
+                <div className="flex gap-4">
+                  <GaugeRing value={eq.disponibilidade} label="Disponib." color="#2A7D45" />
+                  <GaugeRing value={eq.performance}     label="Perf."     color="#3B82F6" />
+                  <GaugeRing value={eq.qualidade}       label="Qualid."   color="#F59E0B" />
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Tab Rastreabilidade ───────────────────────────────────────────────────────
+
+const MOCK_RASTREABILIDADE = [
+  {
+    lote_insumo: 'LOT-2025-4872', produto_insumo: 'Roundup Original 480 SL',
+    aplicacao: { data: '2025-11-10', talhao: 'T01 — Gleba Norte', safra: 'Soja 2025/26', fazenda: 'Fazenda Santa Cruz' },
+    colheita: { data: '2026-03-28', quantidade_sc: 16720, safra: 'Soja 2025/26' },
+    ordem_producao: { numero: 'OP-0001', produto_acabado: 'NPK 10-10-10 Granulado', lote_saida: 'LOT-2026-001', status: 'encerrada' },
+  },
+  {
+    lote_insumo: 'YARA-2025-112', produto_insumo: 'MAP 11-52-00',
+    aplicacao: { data: '2025-10-20', talhao: 'T01 — Gleba Norte', safra: 'Soja 2025/26', fazenda: 'Fazenda Santa Cruz' },
+    colheita: { data: '2026-03-28', quantidade_sc: 16720, safra: 'Soja 2025/26' },
+    ordem_producao: { numero: 'OP-0001', produto_acabado: 'NPK 10-10-10 Granulado', lote_saida: 'LOT-2026-001', status: 'encerrada' },
+  },
+  {
+    lote_insumo: 'SEM-25-0091', produto_insumo: 'Soja RR1 Intacta',
+    aplicacao: { data: '2025-10-19', talhao: 'T03 — Brejo', safra: 'Soja 2025/26', fazenda: 'Fazenda Santa Cruz' },
+    colheita: { data: '2026-03-28', quantidade_sc: 16720, safra: 'Soja 2025/26' },
+    ordem_producao: null,
+  },
+  {
+    lote_insumo: 'URE-2025-0034', produto_insumo: 'Ureia 45%',
+    aplicacao: { data: '2025-12-05', talhao: 'T01 — Área Principal', safra: 'Cana 2025', fazenda: 'Sítio Boa Esperança' },
+    colheita: null,
+    ordem_producao: { numero: 'OP-0002', produto_acabado: 'Fertilizante Foliar Especial', lote_saida: 'LOT-2026-002', status: 'em_andamento' },
+  },
+]
+
+function ChainStep({ label, content, done }: { label: string; content: React.ReactNode; done: boolean }) {
+  return (
+    <div className="flex gap-3">
+      <div className="flex flex-col items-center">
+        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${done ? 'bg-accent text-bg' : 'bg-card2 border border-border text-text-muted'}`}>
+          {done ? '✓' : '—'}
+        </div>
+        <div className="w-px flex-1 bg-border mt-1" />
+      </div>
+      <div className="pb-4 flex-1 min-w-0">
+        <p className="text-xs font-semibold text-text-secondary uppercase tracking-wide mb-1">{label}</p>
+        <div className={`text-sm rounded-lg px-3 py-2 border ${done ? 'bg-card2 border-border text-text-primary' : 'bg-card border-border/50 text-text-muted italic'}`}>
+          {content}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function TabRastreabilidade() {
+  const [busca, setBusca] = useState('')
+  const [detalhe, setDetalhe] = useState<typeof MOCK_RASTREABILIDADE[0] | null>(null)
+
+  const rows = MOCK_RASTREABILIDADE.filter(r =>
+    r.lote_insumo.toLowerCase().includes(busca.toLowerCase()) ||
+    r.produto_insumo.toLowerCase().includes(busca.toLowerCase())
+  )
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <div className="relative">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+          <input value={busca} onChange={e => setBusca(e.target.value)}
+            placeholder="Buscar por lote ou produto..."
+            className="bg-card2 border border-border rounded-lg pl-9 pr-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent w-72" />
+        </div>
+        <p className="text-xs text-text-muted">Rastreie a cadeia completa do insumo ao produto acabado</p>
+      </div>
+
+      <div className="bg-card border border-border rounded-xl overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border">
+              {['Nº Lote Insumo', 'Produto', 'Aplicação', 'Colheita', 'Ordem Produção', 'Produto Acabado', ''].map(h => (
+                <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-text-secondary uppercase tracking-wider whitespace-nowrap">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rows.length === 0 && (
+              <tr><td colSpan={7} className="text-center py-8 text-text-muted text-sm">Nenhum resultado encontrado</td></tr>
+            )}
+            {rows.map(r => (
+              <tr key={r.lote_insumo} className="hover:bg-card2 transition-colors">
+                <td className="px-4 py-3 font-mono text-xs text-accent">{r.lote_insumo}</td>
+                <td className="px-4 py-3 text-text-primary">{r.produto_insumo}</td>
+                <td className="px-4 py-3 text-text-muted text-xs">{r.aplicacao.data}<br />{r.aplicacao.safra}</td>
+                <td className="px-4 py-3">
+                  {r.colheita
+                    ? <span className="text-accent text-xs font-medium">{r.colheita.data} — {r.colheita.quantidade_sc.toLocaleString('pt-BR')} sc</span>
+                    : <span className="text-text-muted text-xs italic">Pendente</span>}
+                </td>
+                <td className="px-4 py-3 font-mono text-xs text-text-muted">{r.ordem_producao?.numero ?? '—'}</td>
+                <td className="px-4 py-3 text-xs">{r.ordem_producao?.produto_acabado ?? '—'}</td>
+                <td className="px-4 py-3">
+                  <button onClick={() => setDetalhe(r)}
+                    className="text-xs text-accent hover:underline whitespace-nowrap">Ver cadeia</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {detalhe && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setDetalhe(null)}>
+          <div className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-5">
+              <div>
+                <p className="text-base font-semibold text-text-primary">Cadeia de Rastreabilidade</p>
+                <p className="text-xs text-text-muted font-mono mt-0.5">{detalhe.lote_insumo}</p>
+              </div>
+              <button onClick={() => setDetalhe(null)} className="text-text-muted hover:text-text-primary"><X size={18} /></button>
+            </div>
+            <div>
+              <ChainStep label="Insumo" done content={<>{detalhe.produto_insumo} <span className="font-mono text-xs text-accent">#{detalhe.lote_insumo}</span></>} />
+              <ChainStep label="Aplicação em campo" done content={<>{detalhe.aplicacao.data} · {detalhe.aplicacao.talhao}<br /><span className="text-text-muted">{detalhe.aplicacao.safra} — {detalhe.aplicacao.fazenda}</span></>} />
+              <ChainStep label="Colheita" done={!!detalhe.colheita}
+                content={detalhe.colheita
+                  ? <>{detalhe.colheita.data} · <span className="font-mono">{detalhe.colheita.quantidade_sc.toLocaleString('pt-BR')} sc</span></>
+                  : 'Aguardando colheita'} />
+              <ChainStep label="Ordem de Produção" done={!!detalhe.ordem_producao}
+                content={detalhe.ordem_producao
+                  ? <>{detalhe.ordem_producao.numero} · <StatusBadge status={detalhe.ordem_producao.status} /></>
+                  : 'Não vinculada'} />
+              <ChainStep label="Produto Acabado" done={!!detalhe.ordem_producao?.lote_saida}
+                content={detalhe.ordem_producao?.lote_saida
+                  ? <>{detalhe.ordem_producao.produto_acabado} <span className="font-mono text-xs text-accent">#{detalhe.ordem_producao.lote_saida}</span></>
+                  : 'Pendente'} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Página Principal ─────────────────────────────────────────────────────────
 
-const TABS = ['Safras', 'Talhões', 'Aplicações', 'Diário de Campo', 'Ordens de Serviço ★', 'Custeio e Resultado ★']
+const TABS_REVENDA   = ['Safras', 'Talhões', 'Aplicações', 'Diário de Campo']
+const TABS_INDUSTRIA = ['Safras', 'Talhões', 'Aplicações', 'Diário de Campo', 'Ordens de Serviço ★', 'Custeio e Resultado ★', 'OEE de Campo ★', 'Rastreabilidade ★']
 
 export default function Safras() {
+  const { user } = useAuth()
+  const isIndustria = user?.tipo_negocio === 'industria'
+  const TABS = isIndustria ? TABS_INDUSTRIA : TABS_REVENDA
+
   const [tab, setTab] = useState('Safras')
 
   return (
@@ -1123,12 +1356,18 @@ export default function Safras() {
           <h1 className="text-xl font-bold text-text-primary flex items-center gap-2">
             <Leaf size={20} className="text-accent" /> Gestão de Safras
           </h1>
-          <p className="text-sm text-text-muted mt-1">Planejamento, custeio, rastreabilidade e diário de campo</p>
+          <p className="text-sm text-text-muted mt-1">
+            {isIndustria
+              ? 'Planejamento, custeio, rastreabilidade e diário de campo'
+              : 'Suporte técnico ao produtor — visitas, recomendações e histórico de aplicações'}
+          </p>
         </div>
-        <div className="flex items-center gap-2 bg-emerald-900/20 border border-emerald-800/40 rounded-lg px-3 py-1.5">
-          <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wide">IND</span>
-          <span className="text-xs text-text-muted">= módulo exclusivo indústria</span>
-        </div>
+        {isIndustria && (
+          <div className="flex items-center gap-2 bg-emerald-900/20 border border-emerald-800/40 rounded-lg px-3 py-1.5">
+            <span className="text-xs font-semibold text-emerald-400 uppercase tracking-wide">IND</span>
+            <span className="text-xs text-text-muted">= módulo exclusivo indústria</span>
+          </div>
+        )}
       </div>
 
       <Tabs tabs={TABS} active={tab} onChange={setTab} />
@@ -1139,6 +1378,8 @@ export default function Safras() {
       {tab === 'Diário de Campo'         && <TabDiario />}
       {tab === 'Ordens de Serviço ★'    && <TabOrdens />}
       {tab === 'Custeio e Resultado ★'  && <TabCusteio />}
+      {tab === 'OEE de Campo ★'         && <TabOEECampo />}
+      {tab === 'Rastreabilidade ★'      && <TabRastreabilidade />}
     </div>
   )
 }

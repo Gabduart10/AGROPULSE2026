@@ -348,6 +348,8 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
     base_url = 'https://homologacao.focusnfe.com.br' if config.focusnfe_homologacao else 'https://api.focusnfe.com.br'
 
     itens_nfe = []
+    info_adicionais_partes = []
+
     for item in pedido.itens.all():
         sugestao = sugerir_tributacao(empresa_id, pedido.cliente.endereco or config.uf, item.produto)
         impostos = calcular_impostos_item(
@@ -360,6 +362,10 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
             cst_cofins=sugestao.get('cst_cofins', '07'),
             aliquota_cofins=sugestao.get('aliquota_cofins', 0),
         )
+
+        # Rastreabilidade agrícola por item (lote, cultura, safra)
+        if hasattr(item, 'lote') and item.lote:
+            info_adicionais_partes.append(f"Lote {item.produto.sku}: {item.lote}")
 
         itens_nfe.append({
             'numero_item': len(itens_nfe) + 1,
@@ -386,6 +392,15 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
             'cofins_valor': float(impostos['valor_cofins']),
         })
 
+    # Informações adicionais agrônomicas: safra e lotes no DANFE
+    safra_obj = getattr(pedido, 'safra', None)
+    if safra_obj:
+        desc_safra = getattr(safra_obj, 'descricao', None) or getattr(safra_obj, 'nome', None) or str(safra_obj)
+        info_adicionais_partes.insert(0, f"Safra: {desc_safra}")
+
+    # Destinatário Produtor Rural → sem IE, não contribuinte
+    is_produtor_rural = getattr(pedido.cliente, 'tipo_cliente', None) == 'produtor_rural'
+
     payload = {
         'natureza_operacao': 'Venda de mercadoria',
         'forma_pagamento': '0',
@@ -402,6 +417,13 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
         'nome_destinatario': pedido.cliente.nome_razao,
         'items': itens_nfe,
     }
+
+    if info_adicionais_partes:
+        payload['informacoes_adicionais_contribuinte'] = '. '.join(info_adicionais_partes)
+
+    if is_produtor_rural:
+        # Produtor rural pessoa física — sem inscrição estadual de contribuinte
+        payload['indicador_inscricao_estadual_destinatario'] = '9'
 
     try:
         ref = f"pedido_{pedido_venda_id}"

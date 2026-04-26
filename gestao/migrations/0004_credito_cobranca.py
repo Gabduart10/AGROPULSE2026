@@ -1,0 +1,135 @@
+from django.db import migrations, models
+import django.db.models.deletion
+from decimal import Decimal
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('gestao', '0003_banco_model'),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='ConfiguracaoCreditoCobranca',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('dias_atraso_bloqueio', models.IntegerField(default=0)),
+                ('limite_alcada_gerente', models.DecimalField(decimal_places=2, default=Decimal('10000.00'), max_digits=15)),
+                ('limite_alcada_diretor', models.DecimalField(decimal_places=2, default=Decimal('100000.00'), max_digits=15)),
+                ('peso_historico_pagamento', models.IntegerField(default=40)),
+                ('peso_tempo_relacionamento', models.IntegerField(default=20)),
+                ('peso_volume_compras', models.IntegerField(default=20)),
+                ('peso_dados_cadastrais', models.IntegerField(default=20)),
+                ('pct_concentracao_alerta', models.DecimalField(decimal_places=2, default=Decimal('20.00'), max_digits=5)),
+                ('pdd_1_30_dias', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=5)),
+                ('pdd_31_60_dias', models.DecimalField(decimal_places=2, default=Decimal('10.00'), max_digits=5)),
+                ('pdd_61_90_dias', models.DecimalField(decimal_places=2, default=Decimal('30.00'), max_digits=5)),
+                ('pdd_91_180_dias', models.DecimalField(decimal_places=2, default=Decimal('50.00'), max_digits=5)),
+                ('pdd_acima_180_dias', models.DecimalField(decimal_places=2, default=Decimal('100.00'), max_digits=5)),
+                ('empresa', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='config_credito', to='gestao.empresa')),
+            ],
+            options={'verbose_name': 'Configuração Crédito e Cobrança'},
+        ),
+        migrations.CreateModel(
+            name='FichaAnaliseCredito',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('area_plantada_ha', models.DecimalField(blank=True, decimal_places=2, max_digits=10, null=True)),
+                ('cultura_principal', models.CharField(blank=True, max_length=100)),
+                ('produtividade_historica', models.CharField(blank=True, max_length=255)),
+                ('renda_estimada_anual', models.DecimalField(blank=True, decimal_places=2, max_digits=15, null=True)),
+                ('endividamento_declarado', models.DecimalField(decimal_places=2, default=Decimal('0.00'), max_digits=15)),
+                ('garantias', models.TextField(blank=True)),
+                ('limite_solicitado', models.DecimalField(decimal_places=2, max_digits=15)),
+                ('limite_aprovado', models.DecimalField(blank=True, decimal_places=2, max_digits=15, null=True)),
+                ('status', models.CharField(choices=[('em_analise', 'Em Análise'), ('aprovado', 'Aprovado'), ('recusado', 'Recusado'), ('em_revisao', 'Em Revisão')], default='em_analise', max_length=20)),
+                ('data_aprovacao', models.DateTimeField(blank=True, null=True)),
+                ('proxima_revisao', models.DateField(blank=True, null=True)),
+                ('observacoes', models.TextField(blank=True)),
+                ('criado_em', models.DateTimeField(auto_now_add=True)),
+                ('atualizado_em', models.DateTimeField(auto_now=True)),
+                ('analista', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='fichas_criadas', to='gestao.usuario')),
+                ('aprovado_por', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='fichas_aprovadas', to='gestao.usuario')),
+                ('cliente', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='fichas_credito', to='gestao.cliente')),
+                ('empresa', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='fichas_credito', to='gestao.empresa')),
+            ],
+            options={'verbose_name': 'Ficha de Análise de Crédito', 'ordering': ['-criado_em']},
+        ),
+        migrations.CreateModel(
+            name='ScoreCredito',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('score_total', models.DecimalField(decimal_places=2, max_digits=5)),
+                ('score_historico_pagamento', models.DecimalField(decimal_places=2, max_digits=5)),
+                ('score_tempo_relacionamento', models.DecimalField(decimal_places=2, max_digits=5)),
+                ('score_volume_compras', models.DecimalField(decimal_places=2, max_digits=5)),
+                ('score_dados_cadastrais', models.DecimalField(decimal_places=2, max_digits=5)),
+                ('classificacao', models.CharField(max_length=2)),
+                ('calculado_em', models.DateTimeField(auto_now=True)),
+                ('cliente', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='scores_credito', to='gestao.cliente')),
+                ('empresa', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='scores_credito', to='gestao.empresa')),
+            ],
+            options={'verbose_name': 'Score de Crédito', 'unique_together': {('empresa', 'cliente')}},
+        ),
+        migrations.CreateModel(
+            name='TentativaCobranca',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('tipo_contato', models.CharField(choices=[('ligacao', 'Ligação Telefônica'), ('whatsapp', 'WhatsApp'), ('email', 'E-mail'), ('visita', 'Visita Presencial'), ('carta', 'Carta/Notificação')], max_length=20)),
+                ('resultado', models.CharField(choices=[('contato_realizado', 'Contato Realizado'), ('sem_resposta', 'Sem Resposta'), ('promessa_pagamento', 'Promessa de Pagamento'), ('pagamento_efetuado', 'Pagamento Efetuado'), ('recusou_pagar', 'Recusou Pagar'), ('numero_invalido', 'Número Inválido')], max_length=30)),
+                ('observacao', models.TextField(blank=True)),
+                ('proxima_acao', models.CharField(blank=True, max_length=255)),
+                ('proxima_acao_data', models.DateField(blank=True, null=True)),
+                ('criado_em', models.DateTimeField(auto_now_add=True)),
+                ('cliente', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tentativas_cobranca', to='gestao.cliente')),
+                ('conta_receber', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='tentativas_cobranca', to='gestao.contareceber')),
+                ('empresa', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='tentativas_cobranca', to='gestao.empresa')),
+                ('usuario', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='tentativas_cobranca', to='gestao.usuario')),
+            ],
+            options={'verbose_name': 'Tentativa de Cobrança', 'ordering': ['-criado_em']},
+        ),
+        migrations.CreateModel(
+            name='TituloEmDisputa',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('motivo', models.TextField()),
+                ('status', models.CharField(choices=[('em_disputa', 'Em Disputa'), ('resolvido_pago', 'Resolvido — Pago'), ('resolvido_cancelado', 'Resolvido — Cancelado'), ('encaminhado_juridico', 'Encaminhado ao Jurídico')], default='em_disputa', max_length=30)),
+                ('documentos_gerados', models.BooleanField(default=False)),
+                ('criado_em', models.DateTimeField(auto_now_add=True)),
+                ('resolvido_em', models.DateTimeField(blank=True, null=True)),
+                ('conta_receber', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='titulos_disputa', to='gestao.contareceber')),
+                ('empresa', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='titulos_disputa', to='gestao.empresa')),
+                ('usuario', models.ForeignKey(null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='titulos_disputa', to='gestao.usuario')),
+            ],
+            options={'verbose_name': 'Título em Disputa', 'ordering': ['-criado_em']},
+        ),
+        migrations.CreateModel(
+            name='AcordoJudicial',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('valor_total', models.DecimalField(decimal_places=2, max_digits=15)),
+                ('numero_parcelas', models.IntegerField()),
+                ('status', models.CharField(choices=[('ativo', 'Ativo'), ('cumprido', 'Cumprido'), ('inadimplido', 'Inadimplido'), ('cancelado', 'Cancelado')], default='ativo', max_length=20)),
+                ('observacoes', models.TextField(blank=True)),
+                ('criado_em', models.DateTimeField(auto_now_add=True)),
+                ('cliente', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='acordos_judiciais', to='gestao.cliente')),
+                ('empresa', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='acordos_judiciais', to='gestao.empresa')),
+                ('titulo_disputa', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='acordos', to='gestao.tituloemdisputa')),
+            ],
+            options={'verbose_name': 'Acordo Judicial', 'ordering': ['-criado_em']},
+        ),
+        migrations.CreateModel(
+            name='ParcelaAcordoJudicial',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('numero', models.IntegerField()),
+                ('valor', models.DecimalField(decimal_places=2, max_digits=15)),
+                ('data_vencimento', models.DateField()),
+                ('data_pagamento', models.DateField(blank=True, null=True)),
+                ('status', models.CharField(choices=[('pendente', 'Pendente'), ('paga', 'Paga'), ('atrasada', 'Atrasada')], default='pendente', max_length=20)),
+                ('acordo', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='parcelas', to='gestao.acordojudicial')),
+            ],
+            options={'verbose_name': 'Parcela de Acordo Judicial', 'ordering': ['numero']},
+        ),
+    ]

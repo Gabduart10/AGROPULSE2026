@@ -56,6 +56,31 @@ def verificar_travas_pedido(pedido, divida_atual=None):
                 f"/ limite R$ {pedido.cliente.limite_credito}"
             )
 
+    # TRAVA 4: Bloqueio por dias de atraso (configurável — 0 = desativado)
+    try:
+        from .models import ConfiguracaoCreditoCobranca
+        config_credito = ConfiguracaoCreditoCobranca.objects.filter(
+            empresa=pedido.empresa
+        ).first()
+        dias_limite = config_credito.dias_atraso_bloqueio if config_credito else 0
+        if dias_limite > 0:
+            hoje = timezone.now().date()
+            conta_mais_atrasada = ContaReceber.objects.filter(
+                cliente=pedido.cliente,
+                status='pendente',
+                data_vencimento__lt=hoje,
+            ).order_by('data_vencimento').first()
+            if conta_mais_atrasada:
+                dias_atraso = (hoje - conta_mais_atrasada.data_vencimento).days
+                if dias_atraso > dias_limite:
+                    motivos.append(
+                        f"Cliente com {dias_atraso} dias de atraso "
+                        f"(limite configurado: {dias_limite} dias) — "
+                        f"vencimento mais antigo: {conta_mais_atrasada.data_vencimento.strftime('%d/%m/%Y')}"
+                    )
+    except Exception:
+        pass
+
     return len(motivos) > 0, motivos
 
 

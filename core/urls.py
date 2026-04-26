@@ -74,10 +74,32 @@ from gestao.views import (
     api_colaboradores, api_ponto, api_agendar_ferias, api_folha_pagamento,
     # Fase 7 — SuperHost e Matriz-Filial
     api_superhost_clientes, api_superhost_bloquear, api_superhost_alterar_tipo,
-    api_matriz_consolidado, api_matriz_filiais,
+    api_superhost_acessar, api_superhost_plano, api_superhost_unidades,
+    api_matriz_consolidado, api_matriz_filiais, api_filial_detalhe,
+    # 2FA
+    api_2fa_habilitar, api_2fa_confirmar, api_2fa_desabilitar, api_2fa_status,
+    # Configurações comerciais e Datas Comemorativas
+    api_config_comercial, api_auditoria_comercial,
+    api_datas_comemorativas, api_data_comemorativa_detalhe,
     # Fase 8 — SPED e importação
     api_importar_xml_lote, api_consultar_nfes_sefaz,
     api_gerar_sped, api_gerar_efd_reinf,
+    # Fiscal — novos endpoints
+    api_funrural_calcular, api_gnre_list, api_nfe_complementar, api_contingencia_status,
+    # Cobrança e Crédito Rural
+    api_credito_painel, api_credito_aging, api_credito_pdd,
+    api_credito_score, api_credito_score_recalcular,
+    api_credito_fichas, api_credito_ficha_aprovar, api_credito_ficha_recusar,
+    api_credito_lista_cobranca, api_credito_registrar_tentativa, api_credito_tentativas_cliente,
+    api_credito_titulos_disputa, api_credito_titulo_resolver, api_credito_titulo_juridico,
+    api_credito_acordos, api_credito_acordo_parcelas, api_credito_parcela_pagar,
+    api_credito_configuracao,
+    api_credito_historico_inadimplencia, api_credito_snapshot_inadimplencia,
+    # Contratos Agrícolas
+    api_cprs, api_cpr_entregar, api_cpr_liquidar_financeira, api_cpr_alertas,
+    api_barters, api_barter_entregar,
+    api_termos, api_termo_atualizar_preco, api_termo_entregar,
+    api_termos_painel_safra, api_contratos_alertas, api_cotacao_mercado,
     # ViewSets existentes
     PedidoVendaViewSet, ClienteViewSet, ProdutoViewSet,
     ContaPagarViewSet, ContaReceberViewSet,
@@ -326,8 +348,33 @@ urlpatterns = [
     path('api/superhost/clientes/', api_superhost_clientes),
     path('api/superhost/bloquear/<int:empresa_id>/', api_superhost_bloquear),
     path('api/superhost/alterar-tipo/<int:empresa_id>/', api_superhost_alterar_tipo),
+    path('api/superhost/acessar/<int:empresa_id>/', api_superhost_acessar),
+    path('api/superhost/plano/<int:empresa_id>/', api_superhost_plano),
+    path('api/superhost/unidades/<int:empresa_id>/', api_superhost_unidades),
+
+    # ==========================================
+    # 2FA
+    # ==========================================
+    path('api/auth/2fa/habilitar/', api_2fa_habilitar),
+    path('api/auth/2fa/confirmar/', api_2fa_confirmar),
+    path('api/auth/2fa/desabilitar/', api_2fa_desabilitar),
+    path('api/auth/2fa/status/', api_2fa_status),
+
     path('api/matriz/consolidado/', api_matriz_consolidado),
     path('api/matriz/filiais/', api_matriz_filiais),
+    path('api/matriz/filial/<int:filial_id>/detalhe/', api_filial_detalhe),
+
+    # ==========================================
+    # CONFIGURAÇÕES COMERCIAIS
+    # ==========================================
+    path('api/comercial/configuracoes/', api_config_comercial),
+    path('api/comercial/auditoria/', api_auditoria_comercial),
+
+    # ==========================================
+    # DATAS COMEMORATIVAS
+    # ==========================================
+    path('api/comercial/datas-comemorativas/', api_datas_comemorativas),
+    path('api/comercial/datas-comemorativas/<int:pk>/', api_data_comemorativa_detalhe),
 
     # ==========================================
     # FASE 8 — SPED, EFD-REINF, IMPORTAÇÃO EM LOTE
@@ -336,6 +383,50 @@ urlpatterns = [
     path('api/importacao/sefaz-consulta/', api_consultar_nfes_sefaz),
     path('api/fiscal/sped/', api_gerar_sped),
     path('api/fiscal/efd-reinf/', api_gerar_efd_reinf),
+    path('api/fiscal/funrural/calcular/', api_funrural_calcular),
+    path('api/fiscal/gnre/', api_gnre_list),
+    path('api/fiscal/nfe-complementar/<int:pedido_id>/', api_nfe_complementar),
+    path('api/fiscal/contingencia/status/', api_contingencia_status),
+
+    # ==========================================
+    # COBRANÇA E CRÉDITO RURAL
+    # ==========================================
+    path('api/credito/painel/', api_credito_painel),
+    path('api/credito/aging/', api_credito_aging),
+    path('api/credito/pdd/', api_credito_pdd),
+    path('api/credito/score/<int:cliente_id>/', api_credito_score),
+    path('api/credito/score/<int:cliente_id>/recalcular/', api_credito_score_recalcular),
+    path('api/credito/fichas/', api_credito_fichas),
+    path('api/credito/fichas/<int:ficha_id>/aprovar/', api_credito_ficha_aprovar),
+    path('api/credito/fichas/<int:ficha_id>/recusar/', api_credito_ficha_recusar),
+    path('api/cobranca/lista/', api_credito_lista_cobranca),
+    path('api/cobranca/tentativas/', api_credito_registrar_tentativa),
+    path('api/cobranca/tentativas/<int:cliente_id>/', api_credito_tentativas_cliente),
+    path('api/cobranca/titulos-disputa/', api_credito_titulos_disputa),
+    path('api/cobranca/titulos-disputa/<int:titulo_id>/resolver/', api_credito_titulo_resolver),
+    path('api/cobranca/titulos-disputa/<int:titulo_id>/juridico/', api_credito_titulo_juridico),
+    path('api/cobranca/acordos/', api_credito_acordos),
+    path('api/cobranca/acordos/<int:acordo_id>/parcelas/', api_credito_acordo_parcelas),
+    path('api/cobranca/acordos/<int:acordo_id>/parcelas/<int:parcela_id>/pagar/', api_credito_parcela_pagar),
+    path('api/credito/configuracao/', api_credito_configuracao),
+    path('api/credito/historico-inadimplencia/', api_credito_historico_inadimplencia),
+    path('api/credito/snapshot-inadimplencia/', api_credito_snapshot_inadimplencia),
+
+    # ==========================================
+    # CONTRATOS AGRÍCOLAS — CPR, BARTER, TERMO
+    # ==========================================
+    path('api/contratos/cprs/',                                    api_cprs),
+    path('api/contratos/cprs/<int:cpr_id>/entregar/',              api_cpr_entregar),
+    path('api/contratos/cprs/<int:cpr_id>/liquidar-financeira/',   api_cpr_liquidar_financeira),
+    path('api/contratos/cprs/alertas/',                            api_cpr_alertas),
+    path('api/contratos/barter/',                                  api_barters),
+    path('api/contratos/barter/<int:contrato_id>/entregar/',       api_barter_entregar),
+    path('api/contratos/termo/',                                   api_termos),
+    path('api/contratos/termo/<int:termo_id>/preco-mercado/',      api_termo_atualizar_preco),
+    path('api/contratos/termo/<int:termo_id>/entregar/',           api_termo_entregar),
+    path('api/contratos/termo/painel-safra/',                      api_termos_painel_safra),
+    path('api/contratos/alertas/',                                 api_contratos_alertas),
+    path('api/contratos/cotacao-mercado/',                         api_cotacao_mercado),
 
     # ==========================================
     # CADASTROS GERAIS — rotas extras

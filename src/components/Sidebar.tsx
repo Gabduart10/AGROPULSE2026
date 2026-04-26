@@ -4,7 +4,7 @@ import {
   LayoutDashboard, ShoppingCart, Package, Truck, Factory, Leaf,
   DollarSign, FileText, CreditCard, FileSignature, Users,
   UserCheck, Wrench, BarChart2, BookOpen, ChevronLeft, ChevronRight,
-  Building2, Shield,
+  Building2, Shield, Settings,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -15,6 +15,8 @@ interface NavItem {
   path: string
   badge?: string
   industria_only?: boolean
+  diretor_only?: boolean
+  diretor_gerente_only?: boolean
 }
 
 interface NavGroup {
@@ -44,6 +46,7 @@ const NAV: NavGroup[] = [
     items: [
       { id: 'financeiro', label: 'Financeiro',          icon: <DollarSign size={18} />,    path: '/financeiro' },
       { id: 'fiscal',     label: 'Fiscal e Tributário', icon: <FileText size={18} />,      path: '/fiscal' },
+      { id: 'cobranca',   label: 'Cobrança e Crédito',  icon: <CreditCard size={18} />,    path: '/cobranca' },
       { id: 'contratos',  label: 'Contratos Agrícolas', icon: <FileSignature size={18} />, path: '/contratos' },
     ],
   },
@@ -64,7 +67,8 @@ const NAV: NavGroup[] = [
   {
     label: 'Base',
     items: [
-      { id: 'cadastros', label: 'Cadastros Gerais', icon: <BookOpen size={18} />, path: '/cadastros' },
+      { id: 'cadastros',     label: 'Cadastros Gerais', icon: <BookOpen size={18} />, path: '/cadastros' },
+      { id: 'configuracoes', label: 'Configurações',    icon: <Settings size={18} />, path: '/configuracoes', diretor_gerente_only: true },
     ],
   },
 ]
@@ -76,6 +80,8 @@ export default function Sidebar() {
   const isIndustria  = user?.tipo_negocio === 'industria'
   const isMatriz     = user?.is_matriz
   const isSuperhost  = user?.is_superhost
+  const isDiretor    = user?.nivel === 'diretor'
+  const isGerente    = user?.nivel === 'gerente'
 
   return (
     <aside
@@ -149,9 +155,12 @@ export default function Sidebar() {
       {/* Nav groups */}
       <nav className="flex-1 overflow-y-auto py-2 px-2 space-y-4 mt-1">
         {NAV.map((group) => {
-          const visibleItems = group.items.filter(item =>
-            item.industria_only ? isIndustria : true
-          )
+          const visibleItems = group.items.filter(item => {
+            if (item.industria_only && !isIndustria) return false
+            if (item.diretor_only && !isDiretor) return false
+            if (item.diretor_gerente_only && !(isDiretor || isGerente)) return false
+            return true
+          })
           if (visibleItems.length === 0) return null
 
           return (

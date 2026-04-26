@@ -7,6 +7,13 @@ export const api = axios.create({ baseURL: BASE })
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('access_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
+
+  // SuperHost: injeta empresa_id em toda requisição quando está acessando um cliente
+  const empresaId = localStorage.getItem('superhost_empresa_id')
+  if (empresaId) {
+    config.params = { ...config.params, empresa_id: empresaId }
+  }
+
   return config
 })
 

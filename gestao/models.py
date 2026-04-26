@@ -15,9 +15,25 @@ class Empresa(models.Model):
         ('revenda', 'Revenda'),
         ('industria', 'Indústria'),
     ]
+    PLANO_CHOICES = [
+        ('starter',    'Starter'),
+        ('pro',        'Pro'),
+        ('enterprise', 'Enterprise'),
+    ]
+    MODULOS_PADRAO = {
+        'vendas': True, 'estoque': True, 'compras': True,
+        'financeiro': True, 'fiscal': True, 'cobranca': True,
+        'crm': True, 'rh': True, 'bi': True, 'logistica': True,
+        'producao': False, 'safras': True, 'contratos': True,
+        'manutencao': True,
+    }
+
     nome = models.CharField(max_length=255)
     cnpj = models.CharField(max_length=18, unique=True)
     tipo_negocio = models.CharField(max_length=20, choices=TIPO_CHOICES, default='revenda')
+    plano = models.CharField(max_length=20, choices=PLANO_CHOICES, default='starter', verbose_name='Plano')
+    max_usuarios = models.PositiveIntegerField(default=10, verbose_name='Máximo de usuários')
+    modulos_habilitados = models.JSONField(default=dict, blank=True, verbose_name='Módulos habilitados')
 
     # Hierarquia matriz/filial
     # Quando preenchido, esta empresa é filial da empresa apontada.
@@ -39,6 +55,18 @@ class Empresa(models.Model):
         default=2,
         verbose_name='Prazo de expiração de pedidos (dias)',
         help_text='Pedidos aguardando aprovação expiram automaticamente após este prazo.',
+    )
+    prazo_recompra_padrao = models.PositiveIntegerField(
+        default=25,
+        verbose_name='Prazo de recompra padrão (dias)',
+        help_text='Clientes sem comprar há mais que este prazo são alertados. Pode ser sobrescrito por cliente.',
+    )
+    comissao_padrao = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.00,
+        verbose_name='Comissão padrão (%)',
+        help_text='Percentual padrão usado para produtos sem comissão específica.',
     )
     fluxo_compra_completo = models.BooleanField(
         default=False,
@@ -69,8 +97,9 @@ class Usuario(AbstractUser):
         ('diretor', 'Nível 1 - Diretor'),
         ('gerente', 'Nível 2 - Gerente'),
         ('vendedor', 'Nível 3 - Vendedor'),
-        ('administrativo', 'Nível 4 - Administrativo'),
-        ('operacional', 'Nível 5 - Operacional (Visão Cega)'),
+        ('administrativo', 'Nível 4 - Administrativo / Financeiro'),
+        ('operacional', 'Nível 5 - Operacional / Balcão'),
+        ('rh', 'Nível 6 - RH'),
     ]
 
     empresa = models.ForeignKey(Empresa, on_delete=models.SET_NULL, null=True, blank=True)
@@ -85,6 +114,8 @@ class Usuario(AbstractUser):
         verbose_name='Vê apenas seus clientes',
         help_text='Se marcado, o vendedor só enxerga os clientes dos seus próprios pedidos'
     )
+    totp_secret = models.CharField(max_length=64, blank=True, null=True, verbose_name='Segredo TOTP (2FA)')
+    totp_habilitado = models.BooleanField(default=False, verbose_name='2FA habilitado')
 
     class Meta:
         verbose_name = 'Usuário'
@@ -96,6 +127,21 @@ class NotaFiscal(models.Model):
         ('entrada', 'Entrada (Compra/Estoque)'),
         ('saida', 'Saída (Venda/Faturamento)')
     ]
+    STATUS_NF_CHOICES = [
+        ('autorizada',           'Autorizada'),
+        ('contingencia',         'Em Contingência — pendente de transmissão'),
+        ('pendente_transmissao', 'Pendente de Transmissão'),
+        ('cancelada',            'Cancelada'),
+        ('denegada',             'Denegada'),
+    ]
+    MODO_CONTINGENCIA_CHOICES = [
+        ('FSDA',   'FS-DA — Formulário de Segurança para Impressão de DANFE'),
+        ('SCAN',   'SCAN — Sistema de Contingência do Ambiente Nacional'),
+        ('SVC_AN', 'SVC-AN — SEFAZ Virtual de Contingência Ambiente Nacional'),
+        ('SVC_RS', 'SVC-RS — SEFAZ Virtual de Contingência Rio Grande do Sul'),
+        ('EPEC',   'EPEC — Evento Prévio de Emissão em Contingência'),
+    ]
+
     empresa = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='notas')
     fornecedor = models.ForeignKey('Fornecedor', on_delete=models.SET_NULL, null=True, blank=True)
     tipo_nota = models.CharField(max_length=10, choices=TIPO_CHOICES, default='saida')
@@ -104,6 +150,14 @@ class NotaFiscal(models.Model):
     valor_total = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
     arquivo_xml = models.FileField(upload_to='xmls/%Y/%m/%d/', null=True, blank=True)
     chave_acesso = models.CharField(max_length=44, unique=True, null=True, blank=True)
+    status = models.CharField(
+        max_length=25, choices=STATUS_NF_CHOICES,
+        null=True, blank=True, verbose_name='Status de transmissão SEFAZ'
+    )
+    modo_contingencia = models.CharField(
+        max_length=10, choices=MODO_CONTINGENCIA_CHOICES,
+        null=True, blank=True, verbose_name='Modo de contingência'
+    )
 
     def __str__(self):
         tipo = "Entrada" if self.tipo_nota == 'entrada' else "Saída"
@@ -296,6 +350,8 @@ class Cliente(models.Model):
     endereco        = models.CharField(max_length=255, blank=True, null=True)
     coordenadas_gps = models.CharField(max_length=100, blank=True, null=True)
     data_nascimento = models.DateField(blank=True, null=True)
+    data_fundacao   = models.DateField(blank=True, null=True, verbose_name='Data de Fundação (PJ)')
+    prazo_recompra  = models.PositiveIntegerField(null=True, blank=True, verbose_name='Prazo de recompra individual (dias)', help_text='Se vazio, usa o padrão da empresa.')
     limite_credito  = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
     ativo           = models.BooleanField(default=True)
 
@@ -310,7 +366,7 @@ class Cliente(models.Model):
     @property
     def alerta_recompra(self):
         dias = self.dias_sem_comprar
-        if dias is not None and dias >= 25:
+        if dias is not None and dias >= self.prazo_recompra:
             return True
         return False
 
@@ -320,6 +376,26 @@ class Cliente(models.Model):
     class Meta:
         verbose_name = 'Cliente'
         verbose_name_plural = 'Clientes'
+
+
+class DataComemorativa(models.Model):
+    empresa             = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='datas_comemorativas')
+    nome                = models.CharField(max_length=100)
+    dia                 = models.PositiveSmallIntegerField()
+    mes                 = models.PositiveSmallIntegerField()
+    dias_antecedencia   = models.PositiveIntegerField(default=3)
+    para_todos_vendedores = models.BooleanField(default=True)
+    vendedores          = models.ManyToManyField('Usuario', blank=True, related_name='datas_comemorativas')
+    ativo               = models.BooleanField(default=True)
+    criado_por          = models.ForeignKey('Usuario', on_delete=models.SET_NULL, null=True, related_name='datas_criadas')
+
+    class Meta:
+        unique_together = ('empresa', 'dia', 'mes', 'nome')
+        verbose_name = 'Data Comemorativa'
+        verbose_name_plural = 'Datas Comemorativas'
+
+    def __str__(self):
+        return f"{self.nome} ({self.dia:02d}/{self.mes:02d})"
 
 
 class Fornecedor(models.Model):
@@ -497,6 +573,12 @@ class PedidoVenda(models.Model):
             self.valor_total = subtotal
         self.status = 'faturado'
         self.save()
+        # Dispara lembrete de pós-venda para o vendedor e gerentes
+        try:
+            from .dashboard_perfil import _criar_notificacao_pos_venda
+            _criar_notificacao_pos_venda(self)
+        except Exception:
+            pass
         from .models import ContaReceber
         valor_parcela = self.valor_total / parcelas
         hoje = timezone.now().date()
@@ -600,7 +682,8 @@ class ContaReceber(models.Model):
     STATUS_CHOICES = [
         ('pendente', 'Pendente'),
         ('recebido', 'Recebido'),
-        ('atrasado', 'Atrasado'),
+        ('inadimplente', 'Inadimplente'),
+        ('atrasado', 'Inadimplente'),
     ]
     empresa = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='contas_receber')
     cliente = models.ForeignKey('Cliente', on_delete=models.PROTECT, related_name='contas_receber')
@@ -795,6 +878,9 @@ class LogAuditoria(models.Model):
         ('carta_correcao_nfe', 'Carta de Correção NF-e'),
         ('venda_pdv', 'Venda PDV'),
         ('cancelamento_pdv', 'Cancelamento de Venda PDV'),
+        ('acesso_superhost', 'Acesso SuperHost ao Ambiente'),
+        ('bloqueio_empresa', 'Bloqueio/Desbloqueio de Empresa'),
+        ('alteracao_tipo_empresa', 'Alteração de Tipo de Empresa'),
     ]
     empresa = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='logs_auditoria')
     usuario = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True)
@@ -805,6 +891,7 @@ class LogAuditoria(models.Model):
     valor_anterior = models.TextField(blank=True, null=True)
     valor_novo = models.TextField(blank=True, null=True)
     descricao = models.CharField(max_length=500, blank=True)
+    justificativa = models.TextField(blank=True, null=True, verbose_name='Justificativa de acesso')
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     data_hora = models.DateTimeField(auto_now_add=True)
 
@@ -820,7 +907,7 @@ class LogAuditoria(models.Model):
     def registrar(cls, empresa, usuario, acao, modelo_afetado,
                   registro_id, campo_alterado=None,
                   valor_anterior=None, valor_novo=None,
-                  descricao='', request=None):
+                  descricao='', justificativa=None, request=None):
         ip = None
         if request:
             x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -835,6 +922,7 @@ class LogAuditoria(models.Model):
             valor_anterior=str(valor_anterior) if valor_anterior is not None else None,
             valor_novo=str(valor_novo) if valor_novo is not None else None,
             descricao=descricao,
+            justificativa=justificativa,
             ip_address=ip,
         )
 
@@ -875,6 +963,9 @@ class Notificacao(models.Model):
         ('pedido_aprovado', 'Pedido Aprovado — aguardando conclusão do vendedor'),
         ('pedido_expirado', 'Pedido Expirado por Prazo'),
         ('meta_atingida', 'Meta Atingida'),
+        ('pos_venda', 'Pós-venda — Contato após faturamento'),
+        ('data_comemorativa', 'Data Comemorativa'),
+        ('contingencia_sefaz', 'Contingência SEFAZ Ativa'),
     ]
     PRIORIDADE_CHOICES = [
         ('alta', 'Alta'),
@@ -2494,3 +2585,374 @@ class Banco(models.Model):
         verbose_name_plural = 'Bancos'
         ordering = ['nome']
 
+
+
+# ══════════════════════════════════════════════════════
+# COBRANÇA E CRÉDITO RURAL
+# ══════════════════════════════════════════════════════
+
+class ConfiguracaoCreditoCobranca(models.Model):
+    empresa = models.OneToOneField(Empresa, on_delete=models.CASCADE, related_name='config_credito')
+    # Bloqueio automático (0 = desativado)
+    dias_atraso_bloqueio = models.IntegerField(default=0)
+    # Alçadas de aprovação de limite
+    limite_alcada_gerente = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('10000.00'))
+    limite_alcada_diretor = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('100000.00'))
+    # Pesos do score (devem somar 100)
+    peso_historico_pagamento = models.IntegerField(default=40)
+    peso_tempo_relacionamento = models.IntegerField(default=20)
+    peso_volume_compras = models.IntegerField(default=20)
+    peso_dados_cadastrais = models.IntegerField(default=20)
+    # Alerta de concentração de carteira (%)
+    pct_concentracao_alerta = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('20.00'))
+    # PDD por faixa (%)
+    pdd_1_30_dias     = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('0.00'))
+    pdd_31_60_dias    = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('10.00'))
+    pdd_61_90_dias    = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('30.00'))
+    pdd_91_180_dias   = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('50.00'))
+    pdd_acima_180_dias = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('100.00'))
+
+    class Meta:
+        verbose_name = 'Configuração Crédito e Cobrança'
+
+
+class FichaAnaliseCredito(models.Model):
+    STATUS_CHOICES = [
+        ('em_analise', 'Em Análise'),
+        ('aprovado',   'Aprovado'),
+        ('recusado',   'Recusado'),
+        ('em_revisao', 'Em Revisão'),
+    ]
+    empresa             = models.ForeignKey(Empresa,  on_delete=models.CASCADE, related_name='fichas_credito')
+    cliente             = models.ForeignKey(Cliente,  on_delete=models.CASCADE, related_name='fichas_credito')
+    analista            = models.ForeignKey(Usuario,  on_delete=models.SET_NULL, null=True, related_name='fichas_criadas')
+    aprovado_por        = models.ForeignKey(Usuario,  on_delete=models.SET_NULL, null=True, blank=True, related_name='fichas_aprovadas')
+    # Dados agropecuários
+    area_plantada_ha        = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    cultura_principal       = models.CharField(max_length=100, blank=True)
+    produtividade_historica = models.CharField(max_length=255, blank=True)
+    renda_estimada_anual    = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    endividamento_declarado = models.DecimalField(max_digits=15, decimal_places=2, default=Decimal('0.00'))
+    garantias               = models.TextField(blank=True)
+    # Limite
+    limite_solicitado = models.DecimalField(max_digits=15, decimal_places=2)
+    limite_aprovado   = models.DecimalField(max_digits=15, decimal_places=2, null=True, blank=True)
+    # Status e datas
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default='em_analise')
+    data_aprovacao  = models.DateTimeField(null=True, blank=True)
+    proxima_revisao = models.DateField(null=True, blank=True)
+    observacoes     = models.TextField(blank=True)
+    criado_em       = models.DateTimeField(auto_now_add=True)
+    atualizado_em   = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Ficha de Análise de Crédito'
+        ordering = ['-criado_em']
+
+
+class ScoreCredito(models.Model):
+    empresa                    = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='scores_credito')
+    cliente                    = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name='scores_credito')
+    score_total                = models.DecimalField(max_digits=5, decimal_places=2)
+    score_historico_pagamento  = models.DecimalField(max_digits=5, decimal_places=2)
+    score_tempo_relacionamento = models.DecimalField(max_digits=5, decimal_places=2)
+    score_volume_compras       = models.DecimalField(max_digits=5, decimal_places=2)
+    score_dados_cadastrais     = models.DecimalField(max_digits=5, decimal_places=2)
+    classificacao              = models.CharField(max_length=2)  # A, B, C, D, E
+    calculado_em               = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Score de Crédito'
+        unique_together = ('empresa', 'cliente')
+
+
+class TentativaCobranca(models.Model):
+    TIPO_CHOICES = [
+        ('ligacao',  'Ligação Telefônica'),
+        ('whatsapp', 'WhatsApp'),
+        ('email',    'E-mail'),
+        ('visita',   'Visita Presencial'),
+        ('carta',    'Carta/Notificação'),
+    ]
+    RESULTADO_CHOICES = [
+        ('contato_realizado',   'Contato Realizado'),
+        ('sem_resposta',        'Sem Resposta'),
+        ('promessa_pagamento',  'Promessa de Pagamento'),
+        ('pagamento_efetuado',  'Pagamento Efetuado'),
+        ('recusou_pagar',       'Recusou Pagar'),
+        ('numero_invalido',     'Número Inválido'),
+    ]
+    empresa        = models.ForeignKey(Empresa,      on_delete=models.CASCADE, related_name='tentativas_cobranca')
+    cliente        = models.ForeignKey(Cliente,      on_delete=models.CASCADE, related_name='tentativas_cobranca')
+    conta_receber  = models.ForeignKey('ContaReceber', on_delete=models.SET_NULL, null=True, blank=True, related_name='tentativas_cobranca')
+    usuario        = models.ForeignKey(Usuario,      on_delete=models.SET_NULL, null=True, related_name='tentativas_cobranca')
+    tipo_contato   = models.CharField(max_length=20, choices=TIPO_CHOICES)
+    resultado      = models.CharField(max_length=30, choices=RESULTADO_CHOICES)
+    observacao     = models.TextField(blank=True)
+    proxima_acao       = models.CharField(max_length=255, blank=True)
+    proxima_acao_data  = models.DateField(null=True, blank=True)
+    criado_em      = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Tentativa de Cobrança'
+        ordering = ['-criado_em']
+
+
+class TituloEmDisputa(models.Model):
+    STATUS_CHOICES = [
+        ('em_disputa',            'Em Disputa'),
+        ('resolvido_pago',        'Resolvido — Pago'),
+        ('resolvido_cancelado',   'Resolvido — Cancelado'),
+        ('encaminhado_juridico',  'Encaminhado ao Jurídico'),
+    ]
+    empresa       = models.ForeignKey(Empresa,      on_delete=models.CASCADE, related_name='titulos_disputa')
+    conta_receber = models.ForeignKey('ContaReceber', on_delete=models.CASCADE, related_name='titulos_disputa')
+    usuario       = models.ForeignKey(Usuario,      on_delete=models.SET_NULL, null=True, related_name='titulos_disputa')
+    motivo        = models.TextField()
+    status        = models.CharField(max_length=30, choices=STATUS_CHOICES, default='em_disputa')
+    documentos_gerados = models.BooleanField(default=False)
+    criado_em     = models.DateTimeField(auto_now_add=True)
+    resolvido_em  = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = 'Título em Disputa'
+        ordering = ['-criado_em']
+
+
+class AcordoJudicial(models.Model):
+    STATUS_CHOICES = [
+        ('ativo',       'Ativo'),
+        ('cumprido',    'Cumprido'),
+        ('inadimplido', 'Inadimplido'),
+        ('cancelado',   'Cancelado'),
+    ]
+    empresa         = models.ForeignKey(Empresa,           on_delete=models.CASCADE, related_name='acordos_judiciais')
+    cliente         = models.ForeignKey(Cliente,           on_delete=models.CASCADE, related_name='acordos_judiciais')
+    titulo_disputa  = models.ForeignKey(TituloEmDisputa,   on_delete=models.SET_NULL, null=True, blank=True, related_name='acordos')
+    valor_total     = models.DecimalField(max_digits=15, decimal_places=2)
+    numero_parcelas = models.IntegerField()
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default='ativo')
+    observacoes     = models.TextField(blank=True)
+    criado_em       = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Acordo Judicial'
+        ordering = ['-criado_em']
+
+
+class ParcelaAcordoJudicial(models.Model):
+    STATUS_CHOICES = [
+        ('pendente', 'Pendente'),
+        ('paga',     'Paga'),
+        ('atrasada', 'Atrasada'),
+    ]
+    acordo          = models.ForeignKey(AcordoJudicial, on_delete=models.CASCADE, related_name='parcelas')
+    numero          = models.IntegerField()
+    valor           = models.DecimalField(max_digits=15, decimal_places=2)
+    data_vencimento = models.DateField()
+    data_pagamento  = models.DateField(null=True, blank=True)
+    status          = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pendente')
+
+    class Meta:
+        verbose_name = 'Parcela de Acordo Judicial'
+        ordering = ['numero']
+
+
+class HistoricoInadimplencia(models.Model):
+    empresa           = models.ForeignKey('Empresa', on_delete=models.CASCADE, related_name='historico_inadimplencia')
+    mes               = models.IntegerField()
+    ano               = models.IntegerField()
+    indice_pct        = models.DecimalField(max_digits=6, decimal_places=2)
+    total_carteira    = models.DecimalField(max_digits=15, decimal_places=2)
+    total_vencido     = models.DecimalField(max_digits=15, decimal_places=2)
+    pdd_total         = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    registrado_em     = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Histórico de Inadimplência'
+        unique_together = [('empresa', 'mes', 'ano')]
+        ordering = ['-ano', '-mes']
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CONTRATOS AGRÍCOLAS — CPR, BARTER, TERMO
+# ══════════════════════════════════════════════════════════════════════════════
+
+FONTE_PRECO_CHOICES = [
+    ('manual',  'Cotação Manual'),
+    ('cbot',    'CBOT (Integração)'),
+    ('esalq',   'ESALQ (Integração)'),
+]
+
+
+class CPR(models.Model):
+    STATUS_CHOICES = [
+        ('aberta',                'Aberta'),
+        ('liquidada_fisica',      'Liquidada Fisicamente'),
+        ('liquidada_financeira',  'Liquidada Financeiramente'),
+        ('vencida',               'Vencida'),
+        ('cancelada',             'Cancelada'),
+    ]
+    empresa             = models.ForeignKey('Empresa', on_delete=models.CASCADE, related_name='cprs')
+    numero              = models.CharField(max_length=50)
+    emitente            = models.ForeignKey('Cliente', on_delete=models.PROTECT, related_name='cprs_emitidas')
+    produto             = models.ForeignKey('Produto', on_delete=models.PROTECT, related_name='cprs')
+    quantidade_sacas    = models.DecimalField(max_digits=12, decimal_places=3)
+    qualidade_minima    = models.TextField(blank=True)
+    local_entrega       = models.CharField(max_length=255, blank=True)
+    data_emissao        = models.DateField()
+    data_vencimento     = models.DateField()
+    valor_credito       = models.DecimalField(max_digits=15, decimal_places=2)
+    garantias           = models.TextField(blank=True)
+    status              = models.CharField(max_length=30, choices=STATUS_CHOICES, default='aberta')
+    pedido_venda        = models.ForeignKey('PedidoVenda', null=True, blank=True, on_delete=models.SET_NULL, related_name='cprs')
+    observacoes         = models.TextField(blank=True)
+    # Liquidação financeira
+    preco_mercado_manual = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    fonte_preco          = models.CharField(max_length=10, choices=FONTE_PRECO_CHOICES, default='manual')
+    criado_em            = models.DateTimeField(auto_now_add=True)
+    atualizado_em        = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'CPR'
+        unique_together = [('empresa', 'numero')]
+        ordering = ['-data_vencimento']
+
+
+class EntregaCPR(models.Model):
+    cpr                  = models.ForeignKey(CPR, on_delete=models.CASCADE, related_name='entregas')
+    data_entrega         = models.DateField()
+    quantidade_entregue  = models.DecimalField(max_digits=12, decimal_places=3)
+    nota_fiscal_entrada  = models.CharField(max_length=100, blank=True)
+    observacoes          = models.TextField(blank=True)
+    criado_em            = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Entrega de CPR'
+        ordering = ['data_entrega']
+
+
+class ContratosBarter(models.Model):
+    STATUS_CHOICES = [
+        ('ativo',     'Ativo'),
+        ('entregue',  'Entregue'),
+        ('vencido',   'Vencido'),
+        ('cancelado', 'Cancelado'),
+    ]
+    empresa                 = models.ForeignKey('Empresa', on_delete=models.CASCADE, related_name='contratos_barter')
+    numero                  = models.CharField(max_length=50)
+    produtor                = models.ForeignKey('Cliente', on_delete=models.PROTECT, related_name='contratos_barter')
+    safra                   = models.CharField(max_length=20, blank=True, help_text='Ex: 2025/2026')
+    produto_receber         = models.ForeignKey('Produto', on_delete=models.PROTECT, related_name='barters_receber')
+    quantidade_sacas        = models.DecimalField(max_digits=12, decimal_places=3)
+    preco_referencia_manual = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    fonte_preco_referencia  = models.CharField(max_length=10, choices=FONTE_PRECO_CHOICES, default='manual')
+    data_contrato           = models.DateField()
+    data_entrega_prevista   = models.DateField()
+    valor_insumos           = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    status                  = models.CharField(max_length=20, choices=STATUS_CHOICES, default='ativo')
+    observacoes             = models.TextField(blank=True)
+    criado_em               = models.DateTimeField(auto_now_add=True)
+    atualizado_em           = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Contrato Barter'
+        unique_together = [('empresa', 'numero')]
+        ordering = ['-data_entrega_prevista']
+
+    def quantidade_equivalente(self):
+        """Sacas equivalentes ao valor dos insumos pelo preço de referência."""
+        if self.preco_referencia_manual and self.preco_referencia_manual > 0:
+            return round(self.valor_insumos / self.preco_referencia_manual, 3)
+        return None
+
+
+class ItemBarter(models.Model):
+    contrato        = models.ForeignKey(ContratosBarter, on_delete=models.CASCADE, related_name='itens')
+    produto         = models.ForeignKey('Produto', on_delete=models.PROTECT, related_name='itens_barter')
+    quantidade      = models.DecimalField(max_digits=12, decimal_places=3)
+    preco_unitario  = models.DecimalField(max_digits=12, decimal_places=4)
+    pedido_venda    = models.ForeignKey('PedidoVenda', null=True, blank=True, on_delete=models.SET_NULL)
+
+    class Meta:
+        verbose_name = 'Item de Barter'
+
+    @property
+    def subtotal(self):
+        return self.quantidade * self.preco_unitario
+
+
+class EntregaBarter(models.Model):
+    contrato                 = models.ForeignKey(ContratosBarter, on_delete=models.CASCADE, related_name='entregas')
+    data_entrega             = models.DateField()
+    quantidade_entregue      = models.DecimalField(max_digits=12, decimal_places=3)
+    preco_entrega_manual     = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    fonte_preco_entrega      = models.CharField(max_length=10, choices=FONTE_PRECO_CHOICES, default='manual')
+    ajuste_financeiro        = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    nota_fiscal_entrada      = models.CharField(max_length=100, blank=True)
+    observacoes              = models.TextField(blank=True)
+    criado_em                = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Entrega de Barter'
+        ordering = ['data_entrega']
+
+
+class ContratoTermo(models.Model):
+    TIPO_CHOICES = [
+        ('compra', 'Compra Futura'),
+        ('venda',  'Venda Futura'),
+    ]
+    STATUS_CHOICES = [
+        ('aberto',    'Aberto'),
+        ('entregue',  'Entregue'),
+        ('cancelado', 'Cancelado'),
+    ]
+    empresa                   = models.ForeignKey('Empresa', on_delete=models.CASCADE, related_name='contratos_termo')
+    numero                    = models.CharField(max_length=50)
+    tipo                      = models.CharField(max_length=10, choices=TIPO_CHOICES)
+    contraparte               = models.ForeignKey('Cliente', null=True, blank=True, on_delete=models.SET_NULL, related_name='contratos_termo')
+    contraparte_nome          = models.CharField(max_length=255, blank=True)
+    produto                   = models.ForeignKey('Produto', on_delete=models.PROTECT, related_name='contratos_termo')
+    quantidade                = models.DecimalField(max_digits=12, decimal_places=3)
+    preco_travado             = models.DecimalField(max_digits=12, decimal_places=4)
+    data_contrato             = models.DateField()
+    data_entrega              = models.DateField()
+    safra                     = models.CharField(max_length=20, blank=True)
+    status                    = models.CharField(max_length=20, choices=STATUS_CHOICES, default='aberto')
+    observacoes               = models.TextField(blank=True)
+    # Preço de mercado para comparação de exposição
+    preco_mercado_manual      = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+    fonte_preco_mercado       = models.CharField(max_length=10, choices=FONTE_PRECO_CHOICES, default='manual')
+    criado_em                 = models.DateTimeField(auto_now_add=True)
+    atualizado_em             = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Contrato a Termo'
+        unique_together = [('empresa', 'numero')]
+        ordering = ['data_entrega']
+
+    @property
+    def valor_total_travado(self):
+        return self.quantidade * self.preco_travado
+
+    def exposicao_mercado(self):
+        if self.preco_mercado_manual:
+            diff = self.preco_mercado_manual - self.preco_travado
+            return float(diff * self.quantidade)
+        return None
+
+
+class EntregaTermo(models.Model):
+    contrato             = models.ForeignKey(ContratoTermo, on_delete=models.CASCADE, related_name='entregas')
+    data_entrega         = models.DateField()
+    quantidade_entregue  = models.DecimalField(max_digits=12, decimal_places=3)
+    preco_entrega        = models.DecimalField(max_digits=12, decimal_places=4)
+    resultado_financeiro = models.DecimalField(max_digits=15, decimal_places=2, default=0)
+    nota_fiscal          = models.CharField(max_length=100, blank=True)
+    observacoes          = models.TextField(blank=True)
+    criado_em            = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Entrega a Termo'
+        ordering = ['data_entrega']

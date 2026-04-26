@@ -86,7 +86,7 @@ def relatorio_inadimplencia(empresa_id):
     # OTIMIZADO: select_related em vez de query por conta no loop
     contas = ContaReceber.objects.filter(
         empresa_id=empresa_id,
-        status='pendente',
+        status__in=['pendente', 'inadimplente', 'atrasado'],
         data_vencimento__lt=hoje,
     ).select_related('cliente', 'pedido_venda__vendedor')
 

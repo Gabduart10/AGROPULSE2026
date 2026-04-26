@@ -156,6 +156,13 @@ def alertas_validade_lotes(empresa_id, dias_alerta=45):
     alertas = []
     for lote in lotes:
         dias_restantes = (lote.data_validade - hoje).days
+        if dias_restantes < 0:
+            status = 'vencido'
+        elif dias_restantes <= 15:
+            status = 'urgente'
+        else:
+            status = 'atencao'
+
         alertas.append({
             'produto': lote.produto.nome,
             'sku': lote.produto.sku,
@@ -163,7 +170,7 @@ def alertas_validade_lotes(empresa_id, dias_alerta=45):
             'quantidade': round(lote.quantidade, 2),
             'data_validade': lote.data_validade.strftime('%d/%m/%Y'),
             'dias_restantes': dias_restantes,
-            'status': 'vencido' if dias_restantes < 0 else ('urgente' if dias_restantes <= 15 else 'atencao'),
+            'status': status,
         })
 
     return alertas
@@ -204,7 +211,7 @@ def alertas_contas_receber_atrasadas(empresa_id):
 
     contas = ContaReceber.objects.filter(
         empresa_id=empresa_id,
-        status='pendente',
+        status__in=['pendente', 'inadimplente', 'atrasado'],
         data_vencimento__lt=hoje
     ).select_related('cliente').order_by('data_vencimento')
 
@@ -213,6 +220,7 @@ def alertas_contas_receber_atrasadas(empresa_id):
         dias_atraso = (hoje - conta.data_vencimento).days
         resultado.append({
             'id': conta.id,
+            'cliente_id': conta.cliente_id,
             'descricao': conta.descricao,
             'cliente': conta.cliente.nome_fantasia or conta.cliente.nome_razao,
             'valor': round(conta.valor, 2),
@@ -304,6 +312,64 @@ def alertas_aniversariantes(empresa_id):
 
     resultado.sort(key=lambda x: x['dias_restantes'])
     return resultado
+
+
+# ==========================================
+# ALERTAS OPERACIONAIS (BALCÃO DE LOJA)
+# ==========================================
+
+def alertas_operacionais(empresa_id):
+    """
+    Alertas para o perfil operacional/balcão:
+    estoque mínimo, validade, pedidos aguardando e status do caixa.
+    """
+    from .models import PedidoVenda, CaixaDiario
+
+    hoje = timezone.now().date()
+
+    pedidos_aguardando = PedidoVenda.objects.filter(
+        empresa_id=empresa_id,
+        status='aguardando',
+    ).count()
+
+    caixa_aberto = CaixaDiario.objects.filter(
+        empresa_id=empresa_id,
+        status='aberto',
+        data_abertura__date=hoje,
+    ).exists()
+
+    return {
+        'estoque_baixo':      alertas_estoque_baixo(empresa_id),
+        'validade_lotes':     alertas_validade_lotes(empresa_id),
+        'pedidos_aguardando': pedidos_aguardando,
+        'caixa_aberto':       caixa_aberto,
+    }
+
+
+# ==========================================
+# ALERTAS FINANCEIROS / ADMINISTRATIVO
+# ==========================================
+
+def alertas_administrativo(empresa_id):
+    """
+    Alertas para o perfil administrativo/financeiro:
+    pendências financeiras, fiscais, estoque mínimo e pedidos aguardando aprovação.
+    Sem alertas de CRM (clientes inativos, aniversariantes).
+    """
+    from .models import PedidoVenda
+
+    pedidos_aguardando = PedidoVenda.objects.filter(
+        empresa_id=empresa_id,
+        status='aguardando',
+    ).count()
+
+    return {
+        'estoque_baixo':      alertas_estoque_baixo(empresa_id),
+        'validade_lotes':     alertas_validade_lotes(empresa_id),
+        'contas_vencer':      alertas_contas_vencer(empresa_id, dias=7),
+        'contas_atrasadas':   alertas_contas_receber_atrasadas(empresa_id),
+        'pedidos_aguardando': pedidos_aguardando,
+    }
 
 
 # ==========================================

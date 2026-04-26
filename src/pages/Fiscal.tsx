@@ -297,6 +297,7 @@ function TabDocumentos() {
   const [sel, setSel] = useState<Set<number>>(new Set())
   const [cancelarModal, setCancelarModal] = useState<Documento | null>(null)
   const [cceModal, setCceModal] = useState<Documento | null>(null)
+  const [cceCount, setCceCount] = useState(0)
   const [motivoCancelamento, setMotivoCancelamento] = useState('')
   const [correcaoCce, setCorrecaoCce] = useState('')
   const [saving, setSaving] = useState(false)
@@ -315,13 +316,30 @@ function TabDocumentos() {
     setCancelarModal(null); setMotivoCancelamento(''); setSaving(false)
   }
 
+  async function abrirCceModal(doc: Documento) {
+    setCceModal(doc)
+    setCorrecaoCce('')
+    // Fetch current CC-e count from NF-e status
+    try {
+      const { data } = await api.get(`/api/fiscal/status-nfe/${doc.chave}/`)
+      setCceCount(data.numero_sequencial_cce ?? 0)
+    } catch {
+      setCceCount(0)
+    }
+  }
+
   async function enviarCce() {
     if (!cceModal) return
+    if (cceCount >= 20) { alert('Limite de 20 CC-e atingido. Cancele e reemita a nota.'); return }
     setSaving(true)
-    try { await api.post(`/api/fiscal/carta-correcao/${cceModal.chave}/`, { correcao: correcaoCce }) }
-    catch {}
+    try {
+      await api.post(`/api/fiscal/carta-correcao/${cceModal.chave}/`, { correcao: correcaoCce })
+      setCceCount(n => n + 1)
+      alert('CC-e enviada com sucesso.')
+    } catch (e: any) {
+      alert(e?.response?.data?.erro ?? 'Erro ao enviar CC-e.')
+    }
     setCceModal(null); setCorrecaoCce(''); setSaving(false)
-    alert('CC-e enviada com sucesso.')
   }
 
   const statusColor: Record<string, 'green'|'red'|'yellow'|'gray'|'orange'> = {
@@ -414,7 +432,7 @@ function TabDocumentos() {
                       </button>
                       {r.status === 'autorizada' && (
                         <>
-                          <button onClick={() => { setCorrecaoCce(''); setCceModal(r) }}
+                          <button onClick={() => abrirCceModal(r)}
                             className="text-xs border border-blue-200 text-blue-600 bg-blue-50 px-2 py-1 rounded-lg hover:bg-blue-100 transition-colors">
                             CC-e
                           </button>
@@ -456,18 +474,27 @@ function TabDocumentos() {
 
       {/* CC-e */}
       {cceModal && (
-        <Modal title={`Carta de Correção — ${cceModal.tipo.toUpperCase()} nº ${cceModal.numero}`} onClose={() => setCceModal(null)}>
+        <Modal title={`Carta de Correção — ${cceModal.tipo.toUpperCase()} nº ${cceModal.numero}`} onClose={() => { setCceModal(null); setCorrecaoCce('') }}>
           <div className="space-y-4">
             <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-xs text-blue-700 space-y-1">
               <p><strong>Pode corrigir via CC-e:</strong> dados do destinatário, endereço de entrega, dados adicionais, condição de pagamento.</p>
               <p><strong>Exige cancelamento:</strong> valor, quantidade, CFOP, data de emissão, destinatário (CNPJ/CPF).</p>
-              <p>Limite: 20 CC-e por NF-e.</p>
+              <div className="flex items-center justify-between mt-1">
+                <span>Limite: 20 CC-e por NF-e</span>
+                <span className={`font-bold ${cceCount >= 18 ? 'text-red-600' : 'text-blue-700'}`}>{cceCount}/20 enviadas</span>
+              </div>
             </div>
-            <Field label="Texto da Correção * (mín. 15 caracteres)">
-              <textarea className={inp} rows={4} value={correcaoCce} onChange={e => setCorrecaoCce(e.target.value)}
-                placeholder="Onde se lê: ... Leia-se: ..." />
-            </Field>
-            <ModalFooter onClose={() => setCceModal(null)} onSave={enviarCce} saving={saving} disabled={correcaoCce.length < 15} label="Enviar CC-e" />
+            {cceCount >= 20 ? (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-xs text-red-700">
+                Limite atingido. Para corrigir, cancele a nota e reemita.
+              </div>
+            ) : (
+              <Field label="Texto da Correção * (mín. 15 caracteres)">
+                <textarea className={inp} rows={4} value={correcaoCce} onChange={e => setCorrecaoCce(e.target.value)}
+                  placeholder="Onde se lê: ... Leia-se: ..." />
+              </Field>
+            )}
+            <ModalFooter onClose={() => { setCceModal(null); setCorrecaoCce('') }} onSave={enviarCce} saving={saving} disabled={correcaoCce.length < 15 || cceCount >= 20} label="Enviar CC-e" />
           </div>
         </Modal>
       )}
@@ -477,17 +504,33 @@ function TabDocumentos() {
 
 // ─── Tab Contingência ─────────────────────────────────────────────────────────
 
+interface ContingenciaStatus {
+  sefaz_status: 'online' | 'offline' | 'lento'
+  contingencia_ativa: boolean
+  ativada_em?: string
+  horas_desde_ativacao?: number
+  horas_restantes?: number
+  alerta_critico?: boolean
+}
+
 function TabContingencia() {
   const [docs, setDocs] = useState<DocContingencia[]>([])
   const [sefazStatus, setSefazStatus] = useState<'online' | 'offline' | 'lento'>('online')
   const [retransmitindo, setRetransmitindo] = useState<number | null>(null)
+  const [contingenciaStatus, setContingenciaStatus] = useState<ContingenciaStatus | null>(null)
 
-  useEffect(() => {
+  function fetchStatus() {
+    api.get('/api/fiscal/contingencia/status/').then(({ data }) => {
+      setContingenciaStatus(data)
+      setSefazStatus(data.sefaz_status ?? 'online')
+    }).catch(() => {})
+
     api.get('/api/fiscal/contingencia/pendentes/').then(({ data }) => {
       setDocs(data.pendentes ?? data.results ?? data)
-      setSefazStatus(data.sefaz_status ?? 'online')
-    }).catch(() => { setDocs(MOCK_CONTINGENCIA); setSefazStatus('lento') })
-  }, [])
+    }).catch(() => setDocs(MOCK_CONTINGENCIA))
+  }
+
+  useEffect(() => { fetchStatus() }, [])
 
   async function retransmitir(id: number) {
     setRetransmitindo(id)
@@ -499,6 +542,25 @@ function TabContingencia() {
 
   return (
     <div className="space-y-5">
+      {/* Alerta 168h — prazo legal de contingência */}
+      {contingenciaStatus?.contingencia_ativa && (
+        <div className={`rounded-xl border p-4 flex items-start gap-3 ${contingenciaStatus.alerta_critico ? 'bg-red-50 border-red-300' : 'bg-orange-50 border-orange-200'}`}>
+          <AlertTriangle size={18} className={`flex-shrink-0 mt-0.5 ${contingenciaStatus.alerta_critico ? 'text-red-600' : 'text-orange-600'}`} />
+          <div className="flex-1">
+            <p className={`font-semibold text-sm ${contingenciaStatus.alerta_critico ? 'text-red-700' : 'text-orange-700'}`}>
+              {contingenciaStatus.alerta_critico ? 'Prazo Legal Crítico — menos de 24h!' : 'Contingência Ativa — Prazo Legal de 168h'}
+            </p>
+            <p className="text-xs text-text-muted mt-0.5">
+              Ativada há {contingenciaStatus.horas_desde_ativacao}h — restam{' '}
+              <strong className={contingenciaStatus.alerta_critico ? 'text-red-600' : 'text-orange-600'}>
+                {contingenciaStatus.horas_restantes}h
+              </strong>{' '}
+              para regularizar junto à SEFAZ (prazo: 168h conforme NT 2011.002).
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Status SEFAZ */}
       <div className={`rounded-xl border p-4 flex items-center gap-4 ${sefazStatus === 'online' ? 'bg-accent/5 border-accent/20' : sefazStatus === 'lento' ? 'bg-yellow-50 border-yellow-200' : 'bg-red-50 border-red-200'}`}>
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${sefazStatus === 'online' ? 'bg-accent/10' : sefazStatus === 'lento' ? 'bg-yellow-100' : 'bg-red-100'}`}>
@@ -514,7 +576,7 @@ function TabContingencia() {
             {sefazStatus === 'offline' && 'Modo contingência offline ativo. NF-es emitidas localmente com DANFE de contingência.'}
           </p>
         </div>
-        <button onClick={() => setSefazStatus('online')} className="text-xs border border-border text-text-muted px-3 py-1.5 rounded-lg hover:bg-card transition-colors flex items-center gap-1">
+        <button onClick={fetchStatus} className="text-xs border border-border text-text-muted px-3 py-1.5 rounded-lg hover:bg-card transition-colors flex items-center gap-1">
           <RefreshCw size={12} /> Verificar
         </button>
       </div>
@@ -591,14 +653,23 @@ function TabObrigacoesAgro() {
       api.get('/api/fiscal/suspensao-pis-cofins/').then(({ data }) => setSuspensaoRows(data.results ?? data)).catch(() => setSuspensaoRows(MOCK_SUSPENSAO))
   }, [subtab])
 
-  function calcularFunrural() {
+  async function calcularFunrural() {
     const v = +funruralForm.valor_operacao
     if (!v) return
-    const isPJ = funruralForm.tipo_produtor === 'pj'
-    const funrural = v * (isPJ ? 0.015 : 0.012)
-    const gilrat = v * 0.001
-    const senar = v * (isPJ ? 0.0025 : 0.002)
-    setFunruralCalc({ tipo_produtor: funruralForm.tipo_produtor, valor_operacao: v, funrural, gilrat, senar, total: funrural + gilrat + senar })
+    try {
+      const { data } = await api.post('/api/fiscal/funrural/calcular/', {
+        tipo_produtor: funruralForm.tipo_produtor,
+        valor_operacao: v,
+      })
+      setFunruralCalc({ tipo_produtor: data.tipo_produtor, valor_operacao: data.valor_operacao, funrural: data.funrural, gilrat: data.gilrat, senar: data.senar, total: data.total })
+    } catch {
+      // fallback to local calc if API unavailable
+      const isPJ = funruralForm.tipo_produtor === 'pj'
+      const funrural = v * (isPJ ? 0.015 : 0.012)
+      const gilrat = v * 0.001
+      const senar = v * (isPJ ? 0.0025 : 0.002)
+      setFunruralCalc({ tipo_produtor: funruralForm.tipo_produtor, valor_operacao: v, funrural, gilrat, senar, total: funrural + gilrat + senar })
+    }
   }
 
   return (
