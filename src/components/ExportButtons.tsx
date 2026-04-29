@@ -2,6 +2,8 @@ import { useState } from 'react'
 import { FileText, Sheet } from 'lucide-react'
 import { api } from '../lib/api'
 
+const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+
 interface ExportButtonsProps {
   endpoint: string
   params?: Record<string, string>
@@ -33,7 +35,7 @@ export default function ExportButtons({ endpoint, params = {}, filename = 'expor
     } catch {
       const merged: Record<string, string> = { ...params, exportar: tipo }
       if (hasSelection) merged.ids = selectedIds!.join(',')
-      window.open(`http://localhost:8000${endpoint}?${new URLSearchParams(merged).toString()}`)
+      window.open(`${BASE}${endpoint}?${new URLSearchParams(merged).toString()}`)
     } finally {
       setLoading(null)
     }

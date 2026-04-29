@@ -324,8 +324,9 @@ def calcular_impostos_item(preco_unitario, quantidade, regime, aliquota_icms,
 
 def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
     """
-    Envia os dados para o Focus NFe e solicita emissão da NF-e.
-    Retorna o status e a chave de acesso se autorizada.
+    Envia os dados para o Focus NFe e solicita emissão de NF-e (modelo 55)
+    ou NFC-e (modelo 65) conforme o tipo de pessoa do cliente.
+    Pessoa Física (CPF) → NFC-e. Pessoa Jurídica (CNPJ) → NF-e.
     """
     import requests
     from .models import ConfiguracaoFiscal, PedidoVenda
@@ -343,9 +344,12 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
     except PedidoVenda.DoesNotExist:
         return False, 'Pedido não encontrado.'
 
-    # Monta o payload para o Focus NFe
-    # Documentação: https://focusnfe.com.br/doc/
     base_url = 'https://homologacao.focusnfe.com.br' if config.focusnfe_homologacao else 'https://api.focusnfe.com.br'
+
+    # Seleciona modelo fiscal pelo tipo de pessoa do cliente
+    cliente = pedido.cliente
+    is_pf = getattr(cliente, 'tipo_pessoa', 'J') == 'F'
+    modelo_endpoint = 'nfce' if is_pf else 'nfe'
 
     itens_nfe = []
     info_adicionais_partes = []
@@ -363,7 +367,6 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
             aliquota_cofins=sugestao.get('aliquota_cofins', 0),
         )
 
-        # Rastreabilidade agrícola por item (lote, cultura, safra)
         if hasattr(item, 'lote') and item.lote:
             info_adicionais_partes.append(f"Lote {item.produto.sku}: {item.lote}")
 
@@ -392,43 +395,46 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
             'cofins_valor': float(impostos['valor_cofins']),
         })
 
-    # Informações adicionais agrônomicas: safra e lotes no DANFE
     safra_obj = getattr(pedido, 'safra', None)
     if safra_obj:
         desc_safra = getattr(safra_obj, 'descricao', None) or getattr(safra_obj, 'nome', None) or str(safra_obj)
         info_adicionais_partes.insert(0, f"Safra: {desc_safra}")
 
-    # Destinatário Produtor Rural → sem IE, não contribuinte
-    is_produtor_rural = getattr(pedido.cliente, 'tipo_cliente', None) == 'produtor_rural'
+    is_produtor_rural = getattr(cliente, 'tipo_cliente', None) == 'produtor_rural'
 
     payload = {
         'natureza_operacao': 'Venda de mercadoria',
         'forma_pagamento': '0',
-        'tipo_documento': '1',
         'local_destino': '1',
-        'codigo_municipio_fato_gerador': '3550308',  # Campo editável
-        'tipo_impressao_danfe': '1',
+        'codigo_municipio_fato_gerador': '3550308',
         'finalidade_emissao': '1',
         'processo_emissao': '0',
         'cnpj_emitente': config.cnpj,
         'nome_emitente': pedido.empresa.nome,
         'regime_tributario_emitente': config.crt,
-        'cpf_cnpj_destinatario': pedido.cliente.cnpj_cpf,
-        'nome_destinatario': pedido.cliente.nome_razao,
+        'cpf_cnpj_destinatario': cliente.cnpj_cpf,
+        'nome_destinatario': cliente.nome_razao,
         'items': itens_nfe,
     }
+
+    if is_pf:
+        # NFC-e (modelo 65): consumidor final, sem IE, impressão em contingência se necessário
+        payload['consumidor_final'] = '1'
+        payload['indicador_inscricao_estadual_destinatario'] = '9'
+        payload['tipo_impressao_danfe'] = '4'  # DANFE NFC-e
+    else:
+        payload['tipo_documento'] = '1'
+        payload['tipo_impressao_danfe'] = '1'
+        if is_produtor_rural:
+            payload['indicador_inscricao_estadual_destinatario'] = '9'
 
     if info_adicionais_partes:
         payload['informacoes_adicionais_contribuinte'] = '. '.join(info_adicionais_partes)
 
-    if is_produtor_rural:
-        # Produtor rural pessoa física — sem inscrição estadual de contribuinte
-        payload['indicador_inscricao_estadual_destinatario'] = '9'
-
     try:
         ref = f"pedido_{pedido_venda_id}"
         response = requests.post(
-            f"{base_url}/v2/nfe?ref={ref}",
+            f"{base_url}/v2/{modelo_endpoint}?ref={ref}",
             json=payload,
             auth=(config.focusnfe_token, ''),
             timeout=30,
@@ -437,15 +443,16 @@ def emitir_nfe_focusnfe(empresa_id, pedido_venda_id):
 
         if response.status_code in [200, 201]:
             return True, {
+                'modelo': 'NFC-e' if is_pf else 'NF-e',
                 'status': data.get('status'),
                 'chave_nfe': data.get('chave_nfe'),
                 'numero': data.get('numero'),
                 'serie': data.get('serie'),
                 'caminho_danfe': data.get('caminho_danfe'),
-                'mensagem': 'NF-e enviada para processamento.',
+                'mensagem': f"{'NFC-e' if is_pf else 'NF-e'} enviada para processamento.",
             }
         else:
-            return False, data.get('mensagem', 'Erro ao enviar NF-e.')
+            return False, data.get('mensagem', f'Erro ao enviar {modelo_endpoint.upper()}.')
 
     except Exception as e:
         return False, f"Erro de comunicação com Focus NFe: {str(e)}"

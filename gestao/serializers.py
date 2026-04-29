@@ -58,9 +58,16 @@ class PedidoVendaSerializer(serializers.ModelSerializer):
 
 
 class ClienteSerializer(serializers.ModelSerializer):
-    dias_sem_comprar = serializers.IntegerField(read_only=True)
-    alerta_recompra  = serializers.BooleanField(read_only=True)
-    grupo_nome       = serializers.CharField(source='grupo.nome', read_only=True)
+    dias_sem_comprar          = serializers.IntegerField(read_only=True)
+    alerta_recompra           = serializers.BooleanField(read_only=True)
+    grupo_nome                = serializers.CharField(source='grupo.nome', read_only=True)
+    vendedor_responsavel_nome = serializers.SerializerMethodField()
+
+    def get_vendedor_responsavel_nome(self, obj):
+        v = obj.vendedor_responsavel
+        if not v:
+            return None
+        return v.get_full_name() or v.username
 
     class Meta:
         model = Cliente
@@ -71,6 +78,7 @@ class ClienteSerializer(serializers.ModelSerializer):
             'responsavel', 'telefone', 'endereco',
             'coordenadas_gps', 'data_nascimento', 'limite_credito',
             'ativo', 'dias_sem_comprar', 'alerta_recompra',
+            'vendedor_responsavel', 'vendedor_responsavel_nome',
         ]
 
 
@@ -104,6 +112,21 @@ class ProdutoSerializer(serializers.ModelSerializer):
             'fispq', 'ficha_tecnica', 'ativo',
             'lotes',
         ]
+
+    # Campos de custo e margem nunca chegam ao vendedor ou operacional.
+    _CAMPOS_CUSTO = ('custo_medio_ponderado', 'margem_minima')
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            nivel = getattr(request.user, 'nivel', None)
+            if nivel in ('vendedor', 'operacional'):
+                for campo in self._CAMPOS_CUSTO:
+                    data.pop(campo, None)
+                for lote in data.get('lotes', []):
+                    lote.pop('custo_unitario', None)
+        return data
 
 
 # ── Novos serializers ──────────────────────────────────

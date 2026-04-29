@@ -25,8 +25,9 @@ from gestao.views import (
     api_expedicao_lista, api_romaneio,
     # Pedidos de compra
     api_pedidos_compra, api_criar_pedido_compra, api_vincular_nf_pedido_compra,
-    # Permissões
+    # Permissões e Usuários
     api_permissoes_granulares,
+    api_usuarios, api_usuario_detalhe,
     # Fiscal
     api_configuracao_fiscal, api_sugerir_tributacao, api_emitir_nfe,
     api_status_nfe, api_portal_contador, api_popular_dados_fiscais,
@@ -76,10 +77,17 @@ from gestao.views import (
     api_superhost_clientes, api_superhost_bloquear, api_superhost_alterar_tipo,
     api_superhost_acessar, api_superhost_plano, api_superhost_unidades,
     api_matriz_consolidado, api_matriz_filiais, api_filial_detalhe,
+    # Carteira do time — Gerente
+    api_gerente_carteira, api_gerente_redistribuir_carteira, api_gerente_agenda,
+    # Metas de vendedor
+    api_vendedor_metas, api_gerente_metas,
+    # CRM — Visitas
+    api_visitas_crm, api_visita_detalhe,
     # 2FA
     api_2fa_habilitar, api_2fa_confirmar, api_2fa_desabilitar, api_2fa_status,
-    # Configurações comerciais e Datas Comemorativas
+    # Configurações comerciais, Auditoria e Datas Comemorativas
     api_config_comercial, api_auditoria_comercial,
+    api_log_comportamental, api_empresas_acessiveis,
     api_datas_comemorativas, api_data_comemorativa_detalhe,
     # Fase 8 — SPED e importação
     api_importar_xml_lote, api_consultar_nfes_sefaz,
@@ -100,11 +108,20 @@ from gestao.views import (
     api_barters, api_barter_entregar,
     api_termos, api_termo_atualizar_preco, api_termo_entregar,
     api_termos_painel_safra, api_contratos_alertas, api_cotacao_mercado,
+    # Rastreabilidade — Aplicação de Insumos
+    api_aplicacoes_insumo, api_aplicacao_insumo_detalhe,
+    # Plano de Contas e Contabilidade
+    api_grupos_contabeis, api_contas_contabeis, api_conta_contabil_detalhe,
+    api_mapa_contabil, api_mapa_contabil_detalhe,
+    api_lancamentos_contabeis,
+    # Produção e Beneficiamento
+    api_ordens_producao, api_ordem_producao_detalhe,
+    api_beneficiamentos, api_beneficiamento_detalhe,
     # ViewSets existentes
     PedidoVendaViewSet, ClienteViewSet, ProdutoViewSet,
     ContaPagarViewSet, ContaReceberViewSet,
     # Cadastros Gerais — novos ViewSets
-    GrupoClienteViewSet, TabelaPrecoViewSet, VeiculoViewSet,
+    GrupoClienteViewSet, FornecedorViewSet, TabelaPrecoViewSet, VeiculoViewSet,
     FazendaViewSet, GlebaViewSet, TalhaoViewSet,
     DevolucaoVendaViewSet, api_itens_tabela_preco,
     BancoViewSet,
@@ -118,6 +135,7 @@ router.register(r'produtos',          ProdutoViewSet,        basename='produto')
 router.register(r'contas-pagar',      ContaPagarViewSet,     basename='conta-pagar')
 router.register(r'contas-receber',    ContaReceberViewSet,   basename='conta-receber')
 router.register(r'grupos-cliente',    GrupoClienteViewSet,   basename='grupo-cliente')
+router.register(r'fornecedores',      FornecedorViewSet,     basename='fornecedor')
 router.register(r'tabelas-preco',     TabelaPrecoViewSet,    basename='tabela-preco')
 router.register(r'veiculos',          VeiculoViewSet,        basename='veiculo')
 router.register(r'fazendas',          FazendaViewSet,        basename='fazenda')
@@ -205,9 +223,11 @@ urlpatterns = [
     path('api/pedidos-compra/<int:pedido_id>/vincular-nf/', api_vincular_nf_pedido_compra),
 
     # ==========================================
-    # PERMISSÕES
+    # PERMISSÕES E USUÁRIOS
     # ==========================================
     path('api/permissoes/<int:usuario_id>/', api_permissoes_granulares),
+    path('api/usuarios/', api_usuarios),
+    path('api/usuarios/<int:usuario_id>/', api_usuario_detalhe),
 
     # ==========================================
     # FISCAL
@@ -365,10 +385,27 @@ urlpatterns = [
     path('api/matriz/filial/<int:filial_id>/detalhe/', api_filial_detalhe),
 
     # ==========================================
+    # CARTEIRA DO TIME — GERENTE
+    # ==========================================
+    path('api/gerente/carteira/', api_gerente_carteira),
+    path('api/gerente/carteira/redistribuir/', api_gerente_redistribuir_carteira),
+    path('api/gerente/agenda/', api_gerente_agenda),
+    path('api/gerente/metas/', api_gerente_metas),
+    path('api/vendedor/metas/', api_vendedor_metas),
+
+    # ==========================================
+    # CRM — VISITAS A CLIENTES
+    # ==========================================
+    path('api/crm/visitas/', api_visitas_crm),
+    path('api/crm/visitas/<int:visita_id>/', api_visita_detalhe),
+
+    # ==========================================
     # CONFIGURAÇÕES COMERCIAIS
     # ==========================================
     path('api/comercial/configuracoes/', api_config_comercial),
     path('api/comercial/auditoria/', api_auditoria_comercial),
+    path('api/comercial/log-comportamental/', api_log_comportamental),
+    path('api/empresas-acessiveis/', api_empresas_acessiveis),
 
     # ==========================================
     # DATAS COMEMORATIVAS
@@ -427,6 +464,30 @@ urlpatterns = [
     path('api/contratos/termo/painel-safra/',                      api_termos_painel_safra),
     path('api/contratos/alertas/',                                 api_contratos_alertas),
     path('api/contratos/cotacao-mercado/',                         api_cotacao_mercado),
+
+    # ==========================================
+    # RASTREABILIDADE — APLICAÇÃO DE INSUMOS
+    # ==========================================
+    path('api/rastreabilidade/aplicacoes/', api_aplicacoes_insumo),
+    path('api/rastreabilidade/aplicacoes/<int:aplicacao_id>/', api_aplicacao_insumo_detalhe),
+
+    # ==========================================
+    # PLANO DE CONTAS E CONTABILIDADE
+    # ==========================================
+    path('api/contabilidade/grupos/', api_grupos_contabeis),
+    path('api/contabilidade/contas/', api_contas_contabeis),
+    path('api/contabilidade/contas/<int:conta_id>/', api_conta_contabil_detalhe),
+    path('api/contabilidade/mapa/', api_mapa_contabil),
+    path('api/contabilidade/mapa/<int:mapa_id>/', api_mapa_contabil_detalhe),
+    path('api/contabilidade/lancamentos/', api_lancamentos_contabeis),
+
+    # ==========================================
+    # PRODUÇÃO E BENEFICIAMENTO (somente indústrias)
+    # ==========================================
+    path('api/producao/ordens/', api_ordens_producao),
+    path('api/producao/ordens/<int:op_id>/', api_ordem_producao_detalhe),
+    path('api/producao/beneficiamentos/', api_beneficiamentos),
+    path('api/producao/beneficiamentos/<int:benef_id>/', api_beneficiamento_detalhe),
 
     # ==========================================
     # CADASTROS GERAIS — rotas extras

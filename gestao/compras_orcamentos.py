@@ -133,8 +133,12 @@ def listar_orcamentos(empresa_id, filtros=None):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def criar_solicitacao_compra(empresa, solicitante, produto_id, quantidade, justificativa=''):
-    """Qualquer nível pode criar. Vai para aprovação do gerente/diretor."""
+    """Qualquer nível pode criar. Vai para aprovação do gerente/diretor.
+    Requer fluxo_compra_completo=True na empresa."""
     from .models import SolicitacaoCompra, Produto, Notificacao
+
+    if not empresa.fluxo_compra_completo:
+        return False, 'Fluxo completo de compras não habilitado para esta empresa. Ative em Configurações da Empresa.'
 
     try:
         produto = Produto.objects.get(id=produto_id, empresa=empresa)
@@ -252,10 +256,14 @@ def listar_solicitacoes(empresa_id, filtros=None):
 def criar_cotacao(empresa, responsavel, titulo, itens_data, data_encerramento=None, observacoes=''):
     """
     Cria uma cotação com os itens a cotar.
+    Requer fluxo_compra_completo=True na empresa.
 
     itens_data: lista de {'produto_id', 'quantidade'}
     """
     from .models import CotacaoCompra, ItemCotacao, Produto
+
+    if not empresa.fluxo_compra_completo:
+        return False, 'Fluxo completo de compras não habilitado para esta empresa. Ative em Configurações da Empresa.'
 
     if not itens_data:
         return False, 'Informe pelo menos um produto para cotar.'

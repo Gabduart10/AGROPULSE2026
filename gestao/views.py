@@ -36,7 +36,7 @@ from .estoque_inicial_e_financeiro_avulso import (
     listar_lancamentos_avulsos,
 )
 from .serializers import (
-    PedidoVendaSerializer, ClienteSerializer,
+    PedidoVendaSerializer, ClienteSerializer, FornecedorSerializer,
     ProdutoSerializer, ContaPagarSerializer, ContaReceberSerializer,
     GrupoClienteSerializer, TabelaPrecoSerializer, ItemTabelaPrecoSerializer,
     VeiculoSerializer, FazendaSerializer, GlebaSerializer, TalhaoSerializer,
@@ -88,12 +88,34 @@ class ExportMixin:
         if exportar == 'pdf':
             return exportar_pdf(titulo, colunas, linhas, filename=f'{fn}.pdf')
         return exportar_excel(titulo, colunas, linhas, filename=f'{fn}.xlsx')
+
+    def destroy(self, request, *args, **kwargs):
+        nivel = getattr(request.user, 'nivel', None)
+        tem_acesso = nivel == 'diretor'
+        if not tem_acesso:
+            perm = _get_perm(request.user)
+            tem_acesso = perm is not None and perm.excluir_registros
+        if not tem_acesso:
+            return Response({'erro': 'Sem permissão para excluir registros.'}, status=403)
+        confirmacao = (request.data or {}).get('confirmar_senha', '').strip()
+        if not confirmacao:
+            return Response({
+                'erro': 'Exclusão permanente requer confirmação. Envie "confirmar_senha" no corpo da requisição.',
+                'requer_confirmacao': True,
+            }, status=428)
+        if not request.user.check_password(confirmacao):
+            return Response({'erro': 'Senha incorreta. Exclusão negada.'}, status=403)
+        return super().destroy(request, *args, **kwargs)
 from .models import (
-    PedidoVenda, Empresa, Cliente, Produto,
+    PedidoVenda, Empresa, Cliente, Produto, Fornecedor,
     ContaPagar, ContaReceber,
     GrupoCliente, TabelaPreco, ItemTabelaPreco,
     Veiculo, Fazenda, Gleba, Talhao,
-    DevolucaoVenda, Banco, LogAuditoria,
+    DevolucaoVenda, Banco, LogAuditoria, LogComportamental,
+    MetaVendedor, VisitaCliente,
+    AplicacaoInsumo, LoteEstoque,
+    GrupoContabil, ContaContabil, MapaContabil, LancamentoContabil,
+    OrdemProducao, ItemOrdemProducao, BeneficiamentoLote,
 )
 from .relatorios import (
     gerar_dre,
@@ -133,13 +155,38 @@ def _get_empresa_id(request):
     SuperHost (is_staff sem empresa): pode passar ?empresa_id=X para navegar
     pelo ambiente de qualquer cliente. Sem o parâmetro, retorna a primeira
     empresa do banco (comportamento de dev/fallback).
+
+    Diretor de matriz: pode enviar o cabeçalho X-Empresa-Id para operar no
+    contexto de uma filial sem novo login. Validado contra a lista de filiais.
+
+    Gerente com empresas_adicionais: pode enviar X-Empresa-Id para operar em
+    qualquer empresa para a qual o CEO concedeu acesso explícito.
     """
     if getattr(request.user, 'is_staff', False):
         param = request.query_params.get('empresa_id') or request.data.get('empresa_id')
         if param:
             return int(param)
     if request.user.is_authenticated and hasattr(request.user, 'empresa') and request.user.empresa:
-        return request.user.empresa.id
+        user_empresa_id = request.user.empresa.id
+        header_id = request.META.get('HTTP_X_EMPRESA_ID')
+        if header_id:
+            try:
+                target_id = int(header_id)
+                if target_id != user_empresa_id:
+                    nivel = getattr(request.user, 'nivel', None)
+                    # Diretor de matriz: acesso às filiais
+                    if nivel == 'diretor' and Empresa.objects.filter(
+                        id=target_id, empresa_matriz_id=user_empresa_id
+                    ).exists():
+                        return target_id
+                    # Qualquer nível: acesso se CEO concedeu via empresas_adicionais
+                    from .models import PermissaoGranular
+                    perm = PermissaoGranular.objects.filter(usuario=request.user).first()
+                    if perm and perm.empresas_adicionais.filter(id=target_id).exists():
+                        return target_id
+            except (ValueError, TypeError):
+                pass
+        return user_empresa_id
     primeira = Empresa.objects.first()
     return primeira.id if primeira else None
 
@@ -149,6 +196,15 @@ def _get_vendedor_id(request):
     if request.user.is_authenticated and getattr(request.user, 'nivel', None) == 'vendedor':
         return request.user.id
     return None
+
+
+def _get_perm(user):
+    """Retorna PermissaoGranular do usuário, ou None se não existir."""
+    from .models import PermissaoGranular
+    try:
+        return PermissaoGranular.objects.get(usuario=user)
+    except PermissaoGranular.DoesNotExist:
+        return None
 
 
 # ==========================================
@@ -229,7 +285,10 @@ def api_alertas_validade(request):
 
 @api_view(['GET'])
 def api_alertas_contas_vencer(request):
-    """Contas a pagar que vencem em breve."""
+    """Contas a pagar que vencem em breve. Bloqueado para operacional."""
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel == 'operacional':
+        return Response({'erro': 'Acesso negado.'}, status=403)
     empresa_id = _get_empresa_id(request)
     if not empresa_id:
         return Response({'erro': 'Empresa não encontrada.'}, status=400)
@@ -239,7 +298,10 @@ def api_alertas_contas_vencer(request):
 
 @api_view(['GET'])
 def api_alertas_receber_atrasados(request):
-    """Contas a receber já vencidas."""
+    """Contas a receber já vencidas. Bloqueado para operacional."""
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel == 'operacional':
+        return Response({'erro': 'Acesso negado.'}, status=403)
     empresa_id = _get_empresa_id(request)
     if not empresa_id:
         return Response({'erro': 'Empresa não encontrada.'}, status=400)
@@ -248,7 +310,10 @@ def api_alertas_receber_atrasados(request):
 
 @api_view(['GET'])
 def api_alertas_clientes(request):
-    """Clientes sem comprar há mais de X dias."""
+    """Clientes sem comprar. Bloqueado para operacional (contexto de vendas)."""
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel == 'operacional':
+        return Response({'erro': 'Acesso negado.'}, status=403)
     empresa_id = _get_empresa_id(request)
     if not empresa_id:
         return Response({'erro': 'Empresa não encontrada.'}, status=400)
@@ -318,8 +383,68 @@ class ClienteViewSet(ExportMixin, viewsets.ModelViewSet):
             )
         nivel = getattr(self.request.user, 'nivel', None)
         if nivel == 'vendedor' and getattr(self.request.user, 've_apenas_seus_clientes', True):
-            qs = qs.filter(pedidovenda__vendedor=self.request.user).distinct()
+            qs = qs.filter(
+                Q(vendedor_responsavel=self.request.user) |
+                Q(pedidovenda__vendedor=self.request.user)
+            ).distinct()
         return qs.order_by('nome_razao')
+
+    def update(self, request, *args, **kwargs):
+        nivel = getattr(request.user, 'nivel', None)
+        tem_acesso = nivel in ['diretor', 'gerente']
+        if not tem_acesso:
+            perm = _get_perm(request.user)
+            tem_acesso = perm is not None and perm.editar_clientes
+        if not tem_acesso:
+            return Response({'erro': 'Sem permissão para editar clientes.'}, status=403)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        empresa_id = _get_empresa_id(self.request)
+        serializer.save(empresa_id=empresa_id)
+        empresa = Empresa.objects.get(id=empresa_id)
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='criacao', modelo_afetado='Cliente',
+            registro_id=serializer.instance.id,
+            descricao=f'Cliente "{serializer.instance.nome_razao}" criado.',
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        obj = self.get_object()
+        empresa_id = _get_empresa_id(self.request)
+        serializer.save(empresa_id=empresa_id)
+        empresa = Empresa.objects.get(id=empresa_id)
+        LogComportamental.registrar(
+            request=self.request,
+            acao='alterou_cadastro',
+            descricao=f'Cliente "{obj.nome_razao}" editado',
+            modelo_afetado='Cliente',
+            id_afetado=obj.id,
+        )
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='edicao', modelo_afetado='Cliente',
+            registro_id=obj.id,
+            descricao=f'Cliente "{obj.nome_razao}" editado.',
+            request=self.request,
+        )
+
+    def perform_destroy(self, instance):
+        empresa = Empresa.objects.get(id=_get_empresa_id(self.request))
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='exclusao', modelo_afetado='Cliente',
+            registro_id=instance.id,
+            descricao=f'Cliente "{instance.nome_razao}" excluído.',
+            request=self.request,
+        )
+        instance.delete()
 
 
 class ProdutoViewSet(ExportMixin, viewsets.ModelViewSet):
@@ -355,21 +480,77 @@ class ProdutoViewSet(ExportMixin, viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         empresa_id = _get_empresa_id(self.request)
-        from .models import Empresa
         empresa = Empresa.objects.get(id=empresa_id)
         comissao = serializer.validated_data.get('comissao_percentual')
         if comissao is None:
             comissao = empresa.comissao_padrao
         serializer.save(empresa_id=empresa_id, comissao_percentual=comissao)
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='criacao', modelo_afetado='Produto',
+            registro_id=serializer.instance.id,
+            descricao=f'Produto "{serializer.instance.nome}" criado.',
+            request=self.request,
+        )
 
     def perform_update(self, serializer):
         empresa_id = _get_empresa_id(self.request)
-        from .models import Empresa
         empresa = Empresa.objects.get(id=empresa_id)
+        obj = self.get_object()
+        preco_anterior = obj.preco_venda
         if 'comissao_percentual' in serializer.validated_data and serializer.validated_data.get('comissao_percentual') is None:
             serializer.save(empresa_id=empresa_id, comissao_percentual=empresa.comissao_padrao)
         else:
             serializer.save(empresa_id=empresa_id)
+        preco_novo = serializer.instance.preco_venda
+        houve_preco = preco_anterior != preco_novo
+        LogComportamental.registrar(
+            request=self.request,
+            acao='alterou_preco' if houve_preco else 'alterou_cadastro',
+            descricao=f'Produto "{obj.nome}" editado' + (
+                f' — preço {preco_anterior} → {preco_novo}' if houve_preco else ''
+            ),
+            modelo_afetado='Produto',
+            id_afetado=obj.id,
+            valor_anterior=str(preco_anterior) if houve_preco else None,
+            valor_novo=str(preco_novo) if houve_preco else None,
+        )
+        acao_audit = 'alteracao_preco' if houve_preco else 'edicao'
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao=acao_audit, modelo_afetado='Produto',
+            registro_id=obj.id,
+            campo_alterado='preco_venda' if houve_preco else None,
+            valor_anterior=str(preco_anterior) if houve_preco else None,
+            valor_novo=str(preco_novo) if houve_preco else None,
+            descricao=f'Produto "{obj.nome}" editado.',
+            request=self.request,
+        )
+
+    def perform_destroy(self, instance):
+        empresa = Empresa.objects.get(id=_get_empresa_id(self.request))
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='exclusao', modelo_afetado='Produto',
+            registro_id=instance.id,
+            descricao=f'Produto "{instance.nome}" excluído.',
+            request=self.request,
+        )
+        instance.delete()
+
+    def update(self, request, *args, **kwargs):
+        nivel = getattr(request.user, 'nivel', None)
+        tem_acesso = nivel in ['diretor', 'gerente']
+        if not tem_acesso:
+            perm = _get_perm(request.user)
+            tem_acesso = perm is not None and perm.editar_produtos
+        if not tem_acesso:
+            return Response({'erro': 'Sem permissão para editar produtos.'}, status=403)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
 
 class ContaPagarViewSet(ExportMixin, viewsets.ModelViewSet):
@@ -400,6 +581,49 @@ class ContaPagarViewSet(ExportMixin, viewsets.ModelViewSet):
             qs = qs.filter(status=f['status'])
         return qs.order_by('data_vencimento')
 
+    def perform_create(self, serializer):
+        empresa_id = _get_empresa_id(self.request)
+        serializer.save(empresa_id=empresa_id)
+        empresa = Empresa.objects.get(id=empresa_id)
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='criacao', modelo_afetado='ContaPagar',
+            registro_id=serializer.instance.id,
+            descricao=f'Conta a pagar "{serializer.instance.descricao}" criada.',
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        obj = self.get_object()
+        empresa_id = _get_empresa_id(self.request)
+        serializer.save(empresa_id=empresa_id)
+        empresa = Empresa.objects.get(id=empresa_id)
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='edicao', modelo_afetado='ContaPagar',
+            registro_id=obj.id,
+            descricao=f'Conta a pagar "{obj.descricao}" editada.',
+            request=self.request,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        from .models import TransacaoBancaria
+        if TransacaoBancaria.objects.filter(conta_pagar=obj, status='conciliado').exists():
+            return Response(
+                {'erro': 'Este lançamento está conciliado bancariamente e não pode ser excluído.'},
+                status=400
+            )
+        empresa = Empresa.objects.get(id=_get_empresa_id(request))
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=request.user,
+            acao='exclusao', modelo_afetado='ContaPagar',
+            registro_id=obj.id,
+            descricao=f'Conta a pagar "{obj.descricao}" excluída.',
+            request=request,
+        )
+        return super().destroy(request, *args, **kwargs)
+
 
 class ContaReceberViewSet(ExportMixin, viewsets.ModelViewSet):
     serializer_class = ContaReceberSerializer
@@ -428,6 +652,50 @@ class ContaReceberViewSet(ExportMixin, viewsets.ModelViewSet):
         if f['status']:
             qs = qs.filter(status=f['status'])
         return qs.order_by('data_vencimento')
+
+    def perform_create(self, serializer):
+        empresa_id = _get_empresa_id(self.request)
+        serializer.save(empresa_id=empresa_id)
+        empresa = Empresa.objects.get(id=empresa_id)
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='criacao', modelo_afetado='ContaReceber',
+            registro_id=serializer.instance.id,
+            descricao=f'Conta a receber "{serializer.instance.descricao}" criada.',
+            request=self.request,
+        )
+
+    def perform_update(self, serializer):
+        obj = self.get_object()
+        empresa_id = _get_empresa_id(self.request)
+        serializer.save(empresa_id=empresa_id)
+        empresa = Empresa.objects.get(id=empresa_id)
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=self.request.user,
+            acao='edicao', modelo_afetado='ContaReceber',
+            registro_id=obj.id,
+            descricao=f'Conta a receber "{obj.descricao}" editada.',
+            request=self.request,
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        obj = self.get_object()
+        from .models import TransacaoBancaria
+        if TransacaoBancaria.objects.filter(conta_receber=obj, status='conciliado').exists():
+            return Response(
+                {'erro': 'Este lançamento está conciliado bancariamente e não pode ser excluído.'},
+                status=400
+            )
+        empresa = Empresa.objects.get(id=_get_empresa_id(request))
+        LogAuditoria.registrar(
+            empresa=empresa, usuario=request.user,
+            acao='exclusao', modelo_afetado='ContaReceber',
+            registro_id=obj.id,
+            descricao=f'Conta a receber "{obj.descricao}" excluída.',
+            request=request,
+        )
+        return super().destroy(request, *args, **kwargs)
+
 
 @api_view(['GET'])
 def api_notificacoes(request):
@@ -473,6 +741,13 @@ def api_marcar_notificacao_lida(request, notificacao_id):
     try:
         n = Notificacao.objects.get(id=notificacao_id, empresa_id=_get_empresa_id(request))
         n.fechar()
+        LogComportamental.registrar(
+            request=request,
+            acao='fechou_notificacao',
+            descricao=f'Notificação #{notificacao_id} — {n.titulo[:80]}',
+            modelo_afetado='Notificacao',
+            id_afetado=notificacao_id,
+        )
         return Response({'status': 'ok'})
     except Notificacao.DoesNotExist:
         return Response({'erro': 'Não encontrada.'}, status=404)
@@ -503,11 +778,16 @@ def api_fila_aprovacao(request):
 @api_view(['POST'])
 def api_aprovar_pedido(request, pedido_id):
     """
-    Aprova um pedido retido. Acessível por gerente e diretor.
+    Aprova um pedido retido. Acessível por gerente e diretor,
+    ou por usuário com switch aprovar_pedido ativo.
     """
     from .models import PedidoVenda
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['gerente', 'diretor']:
+    tem_acesso = nivel in ['gerente', 'diretor']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.aprovar_pedido
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
 
     try:
@@ -517,6 +797,14 @@ def api_aprovar_pedido(request, pedido_id):
 
     observacao = request.data.get('observacao', '')
     ok, mensagem = aprovar_pedido(pedido, request.user, observacao)
+    if ok:
+        LogComportamental.registrar(
+            request=request,
+            acao='aprovou_pedido',
+            descricao=f'Pedido #{pedido_id} aprovado',
+            modelo_afetado='PedidoVenda',
+            id_afetado=pedido_id,
+        )
     status_code = 200 if ok else 400
     return Response({'mensagem': mensagem}, status=status_code)
 
@@ -541,6 +829,14 @@ def api_recusar_pedido(request, pedido_id):
         return Response({'erro': 'Pedido não encontrado.'}, status=404)
 
     ok, mensagem = recusar_pedido(pedido, request.user, motivo)
+    if ok:
+        LogComportamental.registrar(
+            request=request,
+            acao='recusou_pedido',
+            descricao=f'Pedido #{pedido_id} recusado — {motivo[:100]}',
+            modelo_afetado='PedidoVenda',
+            id_afetado=pedido_id,
+        )
     status_code = 200 if ok else 400
     return Response({'mensagem': mensagem}, status=status_code)
 
@@ -708,11 +1004,16 @@ def api_suprimento(request):
 def api_dre(request):
     """
     DRE Real do mês.
-    Acessível por diretor, gerente e administrativo.
+    Acessível por diretor, gerente e administrativo,
+    ou por usuário com switch ver_dre ativo.
     Parâmetros: ?mes=3&ano=2026&exportar=pdf|excel
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente', 'administrativo']:
+    tem_acesso = nivel in ['diretor', 'gerente', 'administrativo']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_dre
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
 
     hoje = timezone.now()
@@ -720,6 +1021,13 @@ def api_dre(request):
     ano = int(request.query_params.get('ano', hoje.year))
     empresa_id = _get_empresa_id(request)
     exportar = request.query_params.get('exportar')
+
+    LogComportamental.registrar(
+        request=request,
+        acao='exportou_relatorio' if exportar else 'visualizou_relatorio',
+        descricao=f'DRE {mes:02d}/{ano}' + (' — exportado' if exportar else ''),
+        modelo_afetado='DRE',
+    )
 
     dados = gerar_dre(empresa_id, mes, ano)
 
@@ -747,12 +1055,24 @@ def api_dre(request):
 def api_inadimplencia(request):
     """
     Relatório de inadimplência com aging da dívida.
-    Acessível por diretor, gerente e administrativo.
+    Acessível por diretor, gerente e administrativo,
+    ou por usuário com switch ver_relatorios ativo.
     Parâmetros: ?exportar=pdf|excel&cliente_id=X&vendedor_id=X
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente', 'administrativo']:
+    tem_acesso = nivel in ['diretor', 'gerente', 'administrativo']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_relatorios
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
+
+    LogComportamental.registrar(
+        request=request,
+        acao='exportou_relatorio' if request.query_params.get('exportar') else 'visualizou_relatorio',
+        descricao='Inadimplência' + (' — exportado' if request.query_params.get('exportar') else ''),
+        modelo_afetado='Inadimplencia',
+    )
 
     empresa_id = _get_empresa_id(request)
     exportar = request.query_params.get('exportar')
@@ -782,11 +1102,16 @@ def api_inadimplencia(request):
 def api_performance_vendedores(request):
     """
     Performance dos vendedores no mês.
-    Acessível por diretor e gerente.
+    Acessível por diretor e gerente,
+    ou por usuário com switch ver_relatorios ou ver_custos ativo.
     Parâmetros: ?mes=3&ano=2026&vendedor_id=X&exportar=pdf|excel
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente']:
+    tem_acesso = nivel in ['diretor', 'gerente']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and (perm.ver_relatorios or perm.ver_custos)
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
 
     hoje = timezone.now()
@@ -795,6 +1120,13 @@ def api_performance_vendedores(request):
     empresa_id = _get_empresa_id(request)
     exportar = request.query_params.get('exportar')
     f = get_filtros_base(request)
+
+    LogComportamental.registrar(
+        request=request,
+        acao='exportou_relatorio' if exportar else 'visualizou_relatorio',
+        descricao=f'Performance vendedores {mes:02d}/{ano}' + (' — exportado' if exportar else ''),
+        modelo_afetado='PerformanceVendedores',
+    )
 
     dados = relatorio_performance_vendedores(empresa_id, mes, ano)
 
@@ -825,11 +1157,16 @@ def api_performance_vendedores(request):
 def api_comissoes_repasse(request):
     """
     Relatório de comissões para repasse.
-    Acessível por diretor e gerente.
+    Acessível por diretor e gerente,
+    ou por usuário com switch ver_comissoes_outros ativo.
     Parâmetros: ?mes=3&ano=2026&vendedor_id=X&exportar=pdf|excel
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente']:
+    tem_acesso = nivel in ['diretor', 'gerente']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_comissoes_outros
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
 
     hoje = timezone.now()
@@ -838,6 +1175,13 @@ def api_comissoes_repasse(request):
     empresa_id = _get_empresa_id(request)
     exportar = request.query_params.get('exportar')
     f = get_filtros_base(request)
+
+    LogComportamental.registrar(
+        request=request,
+        acao='exportou_relatorio' if exportar else 'visualizou_relatorio',
+        descricao=f'Comissões repasse {mes:02d}/{ano}' + (' — exportado' if exportar else ''),
+        modelo_afetado='ComissoesRepasse',
+    )
 
     dados = relatorio_comissoes_repasse(empresa_id, mes, ano)
 
@@ -872,16 +1216,28 @@ def api_comissoes_repasse(request):
 def api_curva_abc_lucratividade(request):
     """
     Curva ABC por lucratividade real.
-    Acessível por diretor, gerente e administrativo.
+    Acessível por diretor, gerente e administrativo,
+    ou por usuário com switch ver_custos ativo.
     Parâmetros: ?dias=90&produto_id=X&exportar=pdf|excel
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente', 'administrativo']:
+    tem_acesso = nivel in ['diretor', 'gerente', 'administrativo']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_custos
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
 
     dias = int(request.query_params.get('dias', 90))
     empresa_id = _get_empresa_id(request)
     exportar = request.query_params.get('exportar')
+
+    LogComportamental.registrar(
+        request=request,
+        acao='exportou_relatorio' if exportar else 'visualizou_relatorio',
+        descricao=f'Curva ABC lucratividade ({dias} dias)' + (' — exportado' if exportar else ''),
+        modelo_afetado='CurvaABC',
+    )
 
     dados = curva_abc_lucratividade(empresa_id, dias)
 
@@ -1100,6 +1456,9 @@ def api_permissoes_granulares(request, usuario_id):
                 'editar_produtos': permissao.editar_produtos,
                 'excluir_registros': permissao.excluir_registros,
                 'ver_log_comportamental': permissao.ver_log_comportamental,
+                'empresas_adicionais': list(
+                    permissao.empresas_adicionais.values('id', 'nome')
+                ),
             }
         })
 
@@ -1114,8 +1473,189 @@ def api_permissoes_granulares(request, usuario_id):
                 setattr(permissao, campo, bool(request.data[campo]))
         permissao.save()
 
+        # empresas_adicionais: lista de IDs de empresas do mesmo grupo
+        if 'empresas_adicionais' in request.data:
+            ids = request.data['empresas_adicionais']
+            if not isinstance(ids, list):
+                return Response({'erro': 'empresas_adicionais deve ser uma lista de IDs.'}, status=400)
+            # Valida que todas as empresas pertencem ao mesmo grupo que a empresa do diretor
+            empresa_diretor = request.user.empresa
+            empresas_validas = Empresa.objects.filter(
+                id__in=ids
+            ).filter(
+                models.Q(empresa_matriz=empresa_diretor) |
+                models.Q(empresa_matriz=empresa_diretor.empresa_matriz) |
+                models.Q(id=empresa_diretor.empresa_matriz_id)
+            )
+            permissao.empresas_adicionais.set(empresas_validas)
+
+        LogAuditoria.registrar(
+            empresa=usuario.empresa,
+            usuario=request.user,
+            acao='alteracao_permissao',
+            modelo_afetado='PermissaoGranular',
+            registro_id=permissao.id,
+            descricao=f'Permissões de {usuario.username} atualizadas por {request.user.username}',
+            request=request,
+        )
+
         return Response({'mensagem': 'Permissões atualizadas com sucesso.'})
-    
+
+
+# ==========================================
+# GERENCIAMENTO DE USUÁRIOS
+# ==========================================
+
+@api_view(['GET', 'POST'])
+def api_usuarios(request):
+    """
+    GET  — lista usuários da empresa (diretor only).
+    POST — cria novo usuário com perfil de acesso (diretor only).
+    Body POST: {username, senha, first_name, last_name, email, nivel}
+    """
+    from .models import Usuario, PermissaoGranular, Empresa
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel != 'diretor':
+        return Response({'erro': 'Acesso negado. Apenas diretores.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+
+    if request.method == 'GET':
+        usuarios = Usuario.objects.filter(empresa_id=empresa_id).order_by('first_name', 'username')
+        return Response([{
+            'id': u.id,
+            'username': u.username,
+            'nome': u.get_full_name() or u.username,
+            'email': u.email,
+            'nivel': u.nivel,
+            'nivel_display': u.get_nivel_display(),
+            'ativo': u.is_active,
+            'colaborador_id': u.colaborador.id if hasattr(u, 'colaborador') and u.colaborador else None,
+        } for u in usuarios])
+
+    d = request.data
+    username = d.get('username', '').strip()
+    senha = d.get('senha', '').strip()
+    nivel_novo = d.get('nivel', 'vendedor')
+
+    if not username or not senha:
+        return Response({'erro': 'username e senha são obrigatórios.'}, status=400)
+
+    if Usuario.objects.filter(username=username).exists():
+        return Response({'erro': 'Username já existe.'}, status=400)
+
+    niveis_validos = [n[0] for n in Usuario.NIVEIS_CHOICES]
+    if nivel_novo not in niveis_validos:
+        return Response({'erro': f'Nível inválido. Opções: {niveis_validos}'}, status=400)
+
+    empresa = Empresa.objects.get(id=empresa_id)
+    usuario = Usuario.objects.create_user(
+        username=username,
+        email=d.get('email', '').strip(),
+        password=senha,
+        first_name=d.get('first_name', '').strip(),
+        last_name=d.get('last_name', '').strip(),
+        nivel=nivel_novo,
+        empresa=empresa,
+    )
+    PermissaoGranular.objects.create(usuario=usuario, empresa=empresa)
+
+    LogAuditoria.registrar(
+        empresa=empresa,
+        usuario=request.user,
+        acao='alteracao_usuario',
+        modelo_afetado='Usuario',
+        registro_id=usuario.id,
+        descricao=f'Usuário {usuario.username} criado com nível {nivel_novo} por {request.user.username}',
+        request=request,
+    )
+
+    return Response({
+        'id': usuario.id,
+        'username': usuario.username,
+        'mensagem': 'Usuário criado com sucesso.',
+    }, status=201)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def api_usuario_detalhe(request, usuario_id):
+    """
+    GET    — retorna dados do usuário.
+    PATCH  — atualiza nivel, nome, email, senha ou ativo.
+    DELETE — desativa o usuário (is_active=False). Não apaga.
+    """
+    from .models import Usuario
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel != 'diretor':
+        return Response({'erro': 'Acesso negado. Apenas diretores.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+
+    try:
+        usuario = Usuario.objects.get(id=usuario_id, empresa_id=empresa_id)
+    except Usuario.DoesNotExist:
+        return Response({'erro': 'Usuário não encontrado.'}, status=404)
+
+    if request.method == 'GET':
+        return Response({
+            'id': usuario.id,
+            'username': usuario.username,
+            'first_name': usuario.first_name,
+            'last_name': usuario.last_name,
+            'email': usuario.email,
+            'nivel': usuario.nivel,
+            'nivel_display': usuario.get_nivel_display(),
+            'ativo': usuario.is_active,
+        })
+
+    if request.method == 'PATCH':
+        d = request.data
+        for campo in ('first_name', 'last_name', 'email'):
+            if campo in d:
+                setattr(usuario, campo, d[campo])
+        if 'nivel' in d:
+            niveis_validos = [n[0] for n in Usuario.NIVEIS_CHOICES]
+            if d['nivel'] not in niveis_validos:
+                return Response({'erro': 'Nível inválido.'}, status=400)
+            usuario.nivel = d['nivel']
+        if 'senha' in d and d['senha']:
+            usuario.set_password(d['senha'])
+        if 'ativo' in d:
+            usuario.is_active = bool(d['ativo'])
+        usuario.save()
+        LogAuditoria.registrar(
+            empresa=usuario.empresa,
+            usuario=request.user,
+            acao='alteracao_usuario',
+            modelo_afetado='Usuario',
+            registro_id=usuario.id,
+            descricao=f'Dados de {usuario.username} atualizados por {request.user.username}',
+            request=request,
+        )
+        return Response({'mensagem': 'Usuário atualizado.'})
+
+    # DELETE — desativa sem apagar
+    usuario.is_active = False
+    usuario.save(update_fields=['is_active'])
+    if hasattr(usuario, 'colaborador') and usuario.colaborador:
+        col = usuario.colaborador
+        if col.status == 'ativo':
+            col.status = 'inativo'
+            col.save(update_fields=['status'])
+    LogAuditoria.registrar(
+        empresa=usuario.empresa,
+        usuario=request.user,
+        acao='alteracao_usuario',
+        modelo_afetado='Usuario',
+        registro_id=usuario.id,
+        descricao=f'Usuário {usuario.username} desativado por {request.user.username}',
+        request=request,
+    )
+    return Response({'mensagem': 'Usuário desativado.'})
+
+
 @api_view(['GET'])
 def api_sugerir_tributacao(request, produto_id):
     """
@@ -1475,10 +2015,15 @@ def api_lancamentos_financeiros(request):
     GET — lista lançamentos financeiros avulsos.
     POST — cria novo lançamento avulso.
     Parâmetros GET: ?mes=3&ano=2026&tipo=despesa
-    Acessível por diretor e gerente.
+    Acessível por diretor, gerente e administrativo,
+    ou por usuário com switch ver_financeiro ativo.
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente', 'administrativo']:
+    tem_acesso = nivel in ['diretor', 'gerente', 'administrativo']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_financeiro
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
  
     empresa_id = _get_empresa_id(request)
@@ -1513,10 +2058,15 @@ def api_contas_aberto_clientes(request):
     Parâmetros: ?cliente_id=X&data_inicio=&data_fim=
                 &atalho=hoje|semana|mes|mes_anterior|ano
                 &exportar=pdf|excel
-    Acessível por diretor, gerente e administrativo.
+    Acessível por diretor, gerente e administrativo,
+    ou por usuário com switch ver_financeiro ativo.
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente', 'administrativo']:
+    tem_acesso = nivel in ['diretor', 'gerente', 'administrativo']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_financeiro
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
 
     empresa_id = _get_empresa_id(request)
@@ -1577,7 +2127,14 @@ def api_login(request):
     # Superhost (is_staff sem empresa) bypassa a exigência de empresa
     is_superhost = user.is_staff and not user.empresa
 
-    # Verifica 2FA se habilitado
+    # 2FA obrigatório para SuperHost — bloqueia login se não configurado
+    if is_superhost and not getattr(user, 'totp_habilitado', False):
+        return Response({
+            'erro': '2FA obrigatório para SuperHost. Configure o autenticador antes de continuar.',
+            'requires_2fa_setup': True,
+        }, status=403)
+
+    # Verifica 2FA se habilitado (SuperHost sempre cai aqui após o bloco acima)
     if getattr(user, 'totp_habilitado', False) and user.totp_secret:
         totp_code = request.data.get('totp_code', '').strip()
         if not totp_code:
@@ -1620,15 +2177,29 @@ def api_login(request):
             'tipo_negocio': user.empresa.tipo_negocio,
             'meta_mensal': round(user.meta_mensal, 2),
             've_apenas_seus_clientes': user.ve_apenas_seus_clientes,
+            'is_matriz': user.empresa.is_matriz,
+            'is_filial': user.empresa.is_filial,
         })
+
+    if user.empresa:
+        x_forwarded = request.META.get('HTTP_X_FORWARDED_FOR')
+        ip = x_forwarded.split(',')[0] if x_forwarded else request.META.get('REMOTE_ADDR')
+        LogComportamental.objects.create(
+            empresa=user.empresa,
+            usuario=user,
+            acao='login',
+            descricao=f'Login de {user.username}',
+            ip_address=ip,
+            user_agent=request.META.get('HTTP_USER_AGENT', '')[:500],
+        )
 
     return Response({
         'access': str(refresh.access_token),
         'refresh': str(refresh),
         'usuario': usuario_data,
     })
- 
- 
+
+
 @api_view(['POST'])
 def api_logout(request):
     """
@@ -1637,6 +2208,12 @@ def api_logout(request):
     from rest_framework_simplejwt.tokens import RefreshToken
     from rest_framework_simplejwt.exceptions import TokenError
  
+    LogComportamental.registrar(
+        request=request,
+        acao='logout',
+        descricao=f'Logout de {request.user.username}',
+    )
+
     refresh_token = request.data.get('refresh')
     if refresh_token:
         try:
@@ -1644,7 +2221,7 @@ def api_logout(request):
             token.blacklist()
         except TokenError:
             pass  # Token já expirado ou inválido — tudo bem
- 
+
     return Response({'mensagem': 'Logout realizado com sucesso.'})
  
  
@@ -1754,12 +2331,21 @@ def api_manifestar_nfe(request):
 def api_cancelar_nfe(request, referencia):
     """
     Cancela uma NF-e já autorizada.
-    Body: { "justificativa": "texto mínimo 15 chars" }
-    Acessível por diretor e gerente.
+    Body: { "justificativa": "texto mínimo 15 chars", "confirmacao_senha": "..." }
+    Acessível por diretor e gerente. Exige confirmação de senha (ação irreversível).
     """
     nivel = getattr(request.user, 'nivel', None)
     if nivel not in ['diretor', 'gerente']:
         return Response({'erro': 'Acesso negado.'}, status=403)
+
+    confirmacao = request.data.get('confirmacao_senha', '').strip()
+    if not confirmacao:
+        return Response({
+            'erro': 'Cancelamento de NF-e é irreversível junto à SEFAZ. Informe sua senha em "confirmacao_senha" para confirmar.',
+            'requer_confirmacao': True,
+        }, status=428)
+    if not request.user.check_password(confirmacao):
+        return Response({'erro': 'Senha incorreta. Cancelamento negado.'}, status=403)
 
     empresa_id = _get_empresa_id(request)
     just = request.data.get('justificativa', '').strip()
@@ -2403,13 +2989,24 @@ def api_centros_custo(request):
 
 @api_view(['GET'])
 def api_dre_centro_custo(request):
-    """DRE por centro de custo. ?mes=3&ano=2026"""
+    """DRE por centro de custo. ?mes=3&ano=2026
+    Acessível por diretor e gerente, ou com switch ver_dre ativo."""
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente']:
+    tem_acesso = nivel in ['diretor', 'gerente']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_dre
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
     hoje = timezone.now()
     mes  = int(request.query_params.get('mes', hoje.month))
     ano  = int(request.query_params.get('ano', hoje.year))
+    LogComportamental.registrar(
+        request=request,
+        acao='visualizou_relatorio',
+        descricao=f'DRE por centro de custo {mes:02d}/{ano}',
+        modelo_afetado='DRECentroCusto',
+    )
     return Response(dre_por_centro_custo(_get_empresa_id(request), mes, ano))
 
 
@@ -2418,10 +3015,21 @@ def api_fluxo_caixa(request):
     """
     Fluxo de caixa projeção vs realizado.
     ?data_inicio=YYYY-MM-DD&data_fim=YYYY-MM-DD&atalho=mes
+    Acessível por diretor e gerente, ou com switch ver_financeiro ativo.
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente']:
+    tem_acesso = nivel in ['diretor', 'gerente']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_financeiro
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
+    LogComportamental.registrar(
+        request=request,
+        acao='visualizou_relatorio',
+        descricao='Fluxo de caixa',
+        modelo_afetado='FluxoCaixa',
+    )
     f = get_filtros_base(request)
     hoje = date.today()
     data_ini = f['data_inicio'] or hoje.replace(day=1)
@@ -2432,9 +3040,14 @@ def api_fluxo_caixa(request):
 
 @api_view(['GET', 'POST'])
 def api_lancamentos_recorrentes(request):
-    """GET — lista | POST — cria recorrência."""
+    """GET — lista | POST — cria recorrência.
+    Acessível por diretor e gerente, ou com switch ver_financeiro ativo."""
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente']:
+    tem_acesso = nivel in ['diretor', 'gerente']
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_financeiro
+    if not tem_acesso:
         return Response({'erro': 'Acesso negado.'}, status=403)
     empresa_id = _get_empresa_id(request)
 
@@ -2543,11 +3156,11 @@ from .rh import (
 @api_view(['GET', 'POST'])
 def api_colaboradores(request):
     """
-    GET  — lista colaboradores (nunca para vendedor)
-    POST — cria colaborador. Body: {nome_completo, cpf, cargo, salario_base, data_admissao, ...}
+    GET  — lista colaboradores (diretor, gerente, administrativo)
+    POST — cria colaborador (diretor, gerente, administrativo)
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel == 'vendedor':
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
         return Response({'erro': 'Acesso negado.'}, status=403)
     empresa_id = _get_empresa_id(request)
 
@@ -2591,9 +3204,10 @@ def api_ponto(request):
     """
     GET  — relatório do mês. ?colaborador_id=&mes=&ano=
     POST — registra/atualiza ponto. Body: {colaborador_id, data, entrada, saida, ...}
+    Apenas diretor, gerente e administrativo.
     """
     nivel = getattr(request.user, 'nivel', None)
-    if nivel == 'vendedor':
+    if nivel not in ['diretor', 'gerente', 'administrativo']:
         return Response({'erro': 'Acesso negado.'}, status=403)
     empresa_id = _get_empresa_id(request)
 
@@ -2959,6 +3573,496 @@ def api_filial_detalhe(request, filial_id):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# CARTEIRA DO TIME — GERENTE
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET'])
+def api_gerente_carteira(request):
+    """
+    Resumo da carteira de clientes por vendedor da unidade.
+    Retorna métricas de faturamento e clientes por vendedor.
+    Apenas gerente e diretor.
+    """
+    from .models import Usuario, PedidoVenda
+    from django.db.models import Sum, Count, Max
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+    hoje = timezone.now()
+
+    vendedores = Usuario.objects.filter(
+        empresa_id=empresa_id, nivel='vendedor', is_active=True
+    ).order_by('first_name', 'username')
+
+    resultado = []
+    for v in vendedores:
+        total_clientes = Cliente.objects.filter(
+            empresa_id=empresa_id, vendedor_responsavel=v, ativo=True
+        ).count()
+
+        pedidos_qs = PedidoVenda.objects.filter(
+            empresa_id=empresa_id, vendedor=v,
+            status__in=['aprovado', 'faturado'],
+        )
+        stats_total = pedidos_qs.aggregate(
+            faturamento_total=Sum('valor_total'),
+            total_pedidos=Count('id'),
+            ultimo_pedido=Max('data_pedido'),
+        )
+        stats_mes = pedidos_qs.filter(
+            data_pedido__year=hoje.year, data_pedido__month=hoje.month,
+        ).aggregate(
+            faturamento_mes=Sum('valor_total'),
+            pedidos_mes=Count('id'),
+        )
+
+        resultado.append({
+            'vendedor_id': v.id,
+            'vendedor': v.get_full_name() or v.username,
+            'total_clientes_carteira': total_clientes,
+            'faturamento_mes': float(stats_mes['faturamento_mes'] or 0),
+            'pedidos_mes': stats_mes['pedidos_mes'] or 0,
+            'faturamento_total': float(stats_total['faturamento_total'] or 0),
+            'total_pedidos': stats_total['total_pedidos'] or 0,
+            'ultimo_pedido': stats_total['ultimo_pedido'],
+        })
+
+    return Response(resultado)
+
+
+@api_view(['PATCH'])
+def api_gerente_redistribuir_carteira(request):
+    """
+    Reatribui um cliente a outro vendedor (ou remove atribuição).
+    Body: {cliente_id, vendedor_id}  — omitir vendedor_id para desatribuir.
+    Apenas gerente e diretor.
+    """
+    from .models import Usuario
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+    cliente_id = request.data.get('cliente_id')
+    vendedor_id = request.data.get('vendedor_id')
+
+    if not cliente_id:
+        return Response({'erro': 'Informe cliente_id.'}, status=400)
+
+    try:
+        cliente = Cliente.objects.get(id=cliente_id, empresa_id=empresa_id)
+    except Cliente.DoesNotExist:
+        return Response({'erro': 'Cliente não encontrado.'}, status=404)
+
+    anterior_nome = (
+        cliente.vendedor_responsavel.get_full_name() or cliente.vendedor_responsavel.username
+        if cliente.vendedor_responsavel else 'Sem responsável'
+    )
+
+    if vendedor_id:
+        try:
+            vendedor = Usuario.objects.get(
+                id=vendedor_id, empresa_id=empresa_id, nivel='vendedor'
+            )
+        except Usuario.DoesNotExist:
+            return Response({'erro': 'Vendedor não encontrado nesta empresa.'}, status=404)
+        cliente.vendedor_responsavel = vendedor
+        novo_nome = vendedor.get_full_name() or vendedor.username
+    else:
+        cliente.vendedor_responsavel = None
+        novo_nome = 'Sem responsável'
+
+    cliente.save(update_fields=['vendedor_responsavel'])
+
+    LogAuditoria.registrar(
+        empresa=cliente.empresa,
+        usuario=request.user,
+        acao='transferencia_carteira',
+        modelo_afetado='Cliente',
+        registro_id=cliente.id,
+        valor_anterior=anterior_nome,
+        valor_novo=novo_nome,
+        descricao=f'Carteira de {cliente.nome_razao} reatribuída: {anterior_nome} → {novo_nome}',
+        request=request,
+    )
+    LogComportamental.registrar(
+        request=request,
+        acao='alterou_cadastro',
+        descricao=f'Reatribuiu carteira de {cliente.nome_razao} para {novo_nome}',
+        modelo_afetado='Cliente',
+        id_afetado=cliente.id,
+    )
+
+    return Response({'mensagem': f'Carteira de {cliente.nome_razao} reatribuída para {novo_nome}.'})
+
+
+@api_view(['GET'])
+def api_gerente_agenda(request):
+    """
+    Agenda do time: clientes em alerta de recompra por vendedor.
+    Inclui apenas clientes com vendedor_responsavel atribuído.
+    Apenas gerente e diretor.
+    """
+    from .models import Empresa, PedidoVenda
+    from django.db.models import Max
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+    hoje = timezone.now().date()
+
+    try:
+        empresa = Empresa.objects.get(id=empresa_id)
+        prazo_padrao = empresa.prazo_recompra_padrao or 30
+    except Empresa.DoesNotExist:
+        prazo_padrao = 30
+
+    clientes = (
+        Cliente.objects
+        .filter(empresa_id=empresa_id, ativo=True, vendedor_responsavel__isnull=False)
+        .select_related('vendedor_responsavel')
+        .annotate(
+            ultima_compra=Max(
+                'pedidovenda__data_pedido',
+                filter=Q(pedidovenda__status__in=['aprovado', 'faturado'])
+            )
+        )
+    )
+
+    agenda = {}
+    for cliente in clientes:
+        dias = (hoje - cliente.ultima_compra.date()).days if cliente.ultima_compra else None
+        prazo = cliente.prazo_recompra or prazo_padrao
+        if dias is None or dias < prazo:
+            continue
+        v_id = cliente.vendedor_responsavel_id
+        if v_id not in agenda:
+            v = cliente.vendedor_responsavel
+            agenda[v_id] = {
+                'vendedor_id': v_id,
+                'vendedor': v.get_full_name() or v.username,
+                'clientes_pendentes': [],
+            }
+        agenda[v_id]['clientes_pendentes'].append({
+            'cliente_id': cliente.id,
+            'nome': cliente.nome_razao,
+            'dias_sem_comprar': dias,
+            'prazo_recompra': prazo,
+            'telefone': cliente.telefone,
+        })
+
+    resultado = sorted(
+        agenda.values(),
+        key=lambda x: len(x['clientes_pendentes']),
+        reverse=True,
+    )
+    return Response(list(resultado))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# METAS DE VENDEDOR
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET'])
+def api_vendedor_metas(request):
+    """
+    Retorna meta e faturamento realizado do vendedor logado.
+    Apenas nivel='vendedor'. Filtros: ?mes=3&ano=2026
+    """
+    from django.db.models import Sum
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel != 'vendedor':
+        return Response({'erro': 'Acesso restrito a vendedores.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+    hoje = timezone.now()
+    mes = int(request.query_params.get('mes', hoje.month))
+    ano = int(request.query_params.get('ano', hoje.year))
+
+    try:
+        meta_obj = MetaVendedor.objects.get(
+            usuario=request.user, empresa_id=empresa_id, mes=mes, ano=ano
+        )
+        valor_meta = float(meta_obj.valor_meta)
+    except MetaVendedor.DoesNotExist:
+        valor_meta = None
+
+    faturado = float(
+        PedidoVenda.objects.filter(
+            empresa_id=empresa_id,
+            vendedor=request.user,
+            status__in=['aprovado', 'faturado'],
+            data_pedido__year=ano,
+            data_pedido__month=mes,
+        ).aggregate(total=Sum('valor_total'))['total'] or 0
+    )
+
+    percentual = round(faturado / valor_meta * 100, 1) if valor_meta else None
+
+    return Response({
+        'mes': mes,
+        'ano': ano,
+        'valor_meta': valor_meta,
+        'faturamento_realizado': faturado,
+        'percentual_atingido': percentual,
+        'meta_atingida': percentual >= 100 if percentual is not None else False,
+    })
+
+
+@api_view(['GET', 'POST'])
+def api_gerente_metas(request):
+    """
+    GET  — lista metas + realizado de todos os vendedores. ?mes=&ano=
+    POST — define/atualiza meta de um vendedor.
+           Body: {usuario_id, mes, ano, valor_meta}
+    Apenas gerente e diretor.
+    """
+    from .models import Usuario
+    from django.db.models import Sum
+
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+    hoje = timezone.now()
+
+    if request.method == 'GET':
+        mes = int(request.query_params.get('mes', hoje.month))
+        ano = int(request.query_params.get('ano', hoje.year))
+
+        vendedores = Usuario.objects.filter(
+            empresa_id=empresa_id, nivel='vendedor', is_active=True
+        ).order_by('first_name', 'username')
+
+        resultado = []
+        for v in vendedores:
+            try:
+                meta_obj = MetaVendedor.objects.get(
+                    usuario=v, empresa_id=empresa_id, mes=mes, ano=ano
+                )
+                valor_meta = float(meta_obj.valor_meta)
+                meta_id = meta_obj.id
+            except MetaVendedor.DoesNotExist:
+                valor_meta = None
+                meta_id = None
+
+            faturado = float(
+                PedidoVenda.objects.filter(
+                    empresa_id=empresa_id,
+                    vendedor=v,
+                    status__in=['aprovado', 'faturado'],
+                    data_pedido__year=ano,
+                    data_pedido__month=mes,
+                ).aggregate(total=Sum('valor_total'))['total'] or 0
+            )
+
+            percentual = round(faturado / valor_meta * 100, 1) if valor_meta else None
+
+            resultado.append({
+                'meta_id': meta_id,
+                'vendedor_id': v.id,
+                'vendedor': v.get_full_name() or v.username,
+                'mes': mes,
+                'ano': ano,
+                'valor_meta': valor_meta,
+                'faturamento_realizado': faturado,
+                'percentual_atingido': percentual,
+                'meta_atingida': percentual >= 100 if percentual is not None else False,
+            })
+
+        return Response(resultado)
+
+    # POST — define/atualiza
+    from .models import Usuario
+    d = request.data
+    usuario_id = d.get('usuario_id')
+    mes = d.get('mes')
+    ano = d.get('ano')
+    valor_meta = d.get('valor_meta')
+
+    if not all([usuario_id, mes, ano, valor_meta]):
+        return Response({'erro': 'Campos obrigatórios: usuario_id, mes, ano, valor_meta.'}, status=400)
+
+    try:
+        usuario = Usuario.objects.get(id=usuario_id, empresa_id=empresa_id, nivel='vendedor')
+    except Usuario.DoesNotExist:
+        return Response({'erro': 'Vendedor não encontrado nesta empresa.'}, status=404)
+
+    try:
+        valor_meta = Decimal(str(valor_meta))
+        if valor_meta <= 0:
+            raise ValueError
+    except (ValueError, TypeError, InvalidOperation):
+        return Response({'erro': 'valor_meta deve ser um número positivo.'}, status=400)
+
+    meta, criada = MetaVendedor.objects.update_or_create(
+        usuario=usuario,
+        empresa_id=empresa_id,
+        mes=int(mes),
+        ano=int(ano),
+        defaults={'valor_meta': valor_meta},
+    )
+
+    LogAuditoria.registrar(
+        empresa=usuario.empresa,
+        usuario=request.user,
+        acao='alteracao_usuario',
+        modelo_afetado='MetaVendedor',
+        registro_id=meta.id,
+        descricao=f'Meta de {usuario.get_full_name() or usuario.username} — {mes}/{ano}: R$ {valor_meta}',
+        request=request,
+    )
+
+    return Response(
+        {'id': meta.id, 'mensagem': 'Meta ' + ('definida' if criada else 'atualizada') + ' com sucesso.'},
+        status=201 if criada else 200,
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CRM — VISITAS A CLIENTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _visita_to_dict(v):
+    return {
+        'id': v.id,
+        'vendedor_id': v.vendedor_id,
+        'vendedor': v.vendedor.get_full_name() or v.vendedor.username,
+        'cliente_id': v.cliente_id,
+        'cliente': v.cliente.nome_razao,
+        'tipo': v.tipo,
+        'tipo_display': v.get_tipo_display(),
+        'data_visita': v.data_visita,
+        'observacoes': v.observacoes,
+        'resultado': v.resultado,
+        'resultado_display': v.get_resultado_display(),
+        'proximo_contato': v.proximo_contato,
+        'criado_em': v.criado_em,
+    }
+
+
+@api_view(['GET', 'POST'])
+def api_visitas_crm(request):
+    """
+    GET  — lista visitas. Vendedor só vê as suas; gerente/diretor vê todas da unidade.
+           Filtros: ?cliente_id=&vendedor_id=
+    POST — registra nova visita.
+           Body: {cliente_id, tipo, data_visita, observacoes, resultado, proximo_contato}
+    Bloqueado para operacional.
+    """
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel == 'operacional':
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+
+    if request.method == 'GET':
+        qs = VisitaCliente.objects.filter(empresa_id=empresa_id).select_related('vendedor', 'cliente')
+
+        if nivel == 'vendedor':
+            qs = qs.filter(vendedor=request.user)
+
+        cliente_id = request.query_params.get('cliente_id')
+        if cliente_id:
+            qs = qs.filter(cliente_id=cliente_id)
+
+        vendedor_id = request.query_params.get('vendedor_id')
+        if vendedor_id and nivel in ['diretor', 'gerente']:
+            qs = qs.filter(vendedor_id=vendedor_id)
+
+        return Response([_visita_to_dict(v) for v in qs])
+
+    # POST
+    cliente_id = request.data.get('cliente_id')
+    data_visita = request.data.get('data_visita')
+    if not cliente_id or not data_visita:
+        return Response({'erro': 'Campos obrigatórios: cliente_id, data_visita.'}, status=400)
+
+    try:
+        cliente = Cliente.objects.get(id=cliente_id, empresa_id=empresa_id)
+    except Cliente.DoesNotExist:
+        return Response({'erro': 'Cliente não encontrado.'}, status=404)
+
+    if nivel == 'vendedor':
+        na_carteira = Cliente.objects.filter(
+            id=cliente_id, empresa_id=empresa_id
+        ).filter(
+            Q(vendedor_responsavel=request.user) |
+            Q(pedidovenda__vendedor=request.user)
+        ).exists()
+        if not na_carteira:
+            return Response({'erro': 'Este cliente não pertence à sua carteira.'}, status=403)
+
+    visita = VisitaCliente.objects.create(
+        empresa_id=empresa_id,
+        vendedor=request.user,
+        cliente=cliente,
+        tipo=request.data.get('tipo', 'presencial'),
+        data_visita=data_visita,
+        observacoes=request.data.get('observacoes', ''),
+        resultado=request.data.get('resultado', 'neutro'),
+        proximo_contato=request.data.get('proximo_contato') or None,
+    )
+
+    LogComportamental.registrar(
+        request=request,
+        acao='alterou_cadastro',
+        descricao=f'Visita registrada: {cliente.nome_razao} ({visita.get_tipo_display()})',
+        modelo_afetado='VisitaCliente',
+        id_afetado=visita.id,
+    )
+
+    return Response({'id': visita.id, 'mensagem': 'Visita registrada com sucesso.'}, status=201)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def api_visita_detalhe(request, visita_id):
+    """
+    GET    — detalhe completo.
+    PATCH  — edita observações, resultado, tipo ou próximo contato.
+    DELETE — remove (vendedor só remove as suas; gerente/diretor removem qualquer).
+    Bloqueado para operacional.
+    """
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel == 'operacional':
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    empresa_id = _get_empresa_id(request)
+
+    try:
+        visita = VisitaCliente.objects.select_related('vendedor', 'cliente').get(
+            id=visita_id, empresa_id=empresa_id
+        )
+    except VisitaCliente.DoesNotExist:
+        return Response({'erro': 'Visita não encontrada.'}, status=404)
+
+    if nivel == 'vendedor' and visita.vendedor != request.user:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    if request.method == 'GET':
+        return Response(_visita_to_dict(visita))
+
+    if request.method == 'PATCH':
+        for campo in ('observacoes', 'resultado', 'proximo_contato', 'tipo', 'data_visita'):
+            if campo in request.data:
+                setattr(visita, campo, request.data[campo] or None if campo == 'proximo_contato' else request.data[campo])
+        visita.save()
+        return Response({'mensagem': 'Visita atualizada.'})
+
+    # DELETE
+    visita.delete()
+    return Response({'mensagem': 'Visita removida.'})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # 2FA — AUTENTICAÇÃO DE DOIS FATORES
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -3085,11 +4189,12 @@ def api_config_comercial(request):
 
 @api_view(['GET'])
 def api_auditoria_comercial(request):
-    """Lista logs de auditoria da empresa. Apenas diretor e gerente."""
+    """Lista logs de auditoria da empresa. Apenas diretor e superadmin (is_staff)."""
     empresa_id = _get_empresa_id(request)
     nivel = getattr(request.user, 'nivel', None)
-    if nivel not in ['diretor', 'gerente']:
-        return Response({'erro': 'Acesso negado.'}, status=403)
+    is_staff = getattr(request.user, 'is_staff', False)
+    if nivel != 'diretor' and not is_staff:
+        return Response({'erro': 'Acesso negado. Apenas o CEO e o superadmin.'}, status=403)
 
     limite = request.query_params.get('limit', 100)
     try:
@@ -3100,6 +4205,101 @@ def api_auditoria_comercial(request):
     logs = LogAuditoria.objects.filter(empresa_id=empresa_id).select_related('usuario').order_by('-data_hora')[:limite]
     serializer = LogAuditoriaSerializer(logs, many=True)
     return Response(serializer.data)
+
+
+@api_view(['GET'])
+def api_log_comportamental(request):
+    """
+    Lista logs comportamentais da empresa.
+    Diretor sempre tem acesso. Outros precisam do switch ver_log_comportamental.
+    Filtros: ?usuario_id=X&acao=Y&limit=100
+    """
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+
+    tem_acesso = nivel == 'diretor'
+    if not tem_acesso:
+        perm = _get_perm(request.user)
+        tem_acesso = perm is not None and perm.ver_log_comportamental
+    if not tem_acesso:
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    try:
+        limite = min(max(int(request.query_params.get('limit', 100)), 1), 500)
+    except (ValueError, TypeError):
+        limite = 100
+
+    qs = LogComportamental.objects.filter(empresa_id=empresa_id).select_related('usuario').order_by('-data_hora')
+
+    usuario_id = request.query_params.get('usuario_id')
+    if usuario_id:
+        qs = qs.filter(usuario_id=usuario_id)
+
+    acao = request.query_params.get('acao')
+    if acao:
+        qs = qs.filter(acao=acao)
+
+    return Response([{
+        'id': l.id,
+        'usuario_id': l.usuario_id,
+        'usuario': l.usuario.get_full_name() or l.usuario.username if l.usuario else None,
+        'acao': l.acao,
+        'acao_display': l.get_acao_display(),
+        'descricao': l.descricao,
+        'modelo_afetado': l.modelo_afetado,
+        'id_afetado': l.id_afetado,
+        'valor_anterior': l.valor_anterior,
+        'valor_novo': l.valor_novo,
+        'ip_address': l.ip_address,
+        'data_hora': l.data_hora,
+    } for l in qs[:limite]])
+
+
+@api_view(['GET'])
+def api_empresas_acessiveis(request):
+    """
+    Retorna a empresa do usuário logado e, se for diretor de uma matriz,
+    também todas as filiais. Se tiver empresas_adicionais configuradas pelo
+    CEO, essas também são incluídas. Usado pelo frontend para montar o seletor de contexto.
+    """
+    if not request.user.is_authenticated or not getattr(request.user, 'empresa', None):
+        return Response({'erro': 'Usuário sem empresa vinculada.'}, status=400)
+
+    empresa = request.user.empresa
+    ids_incluidos = {empresa.id}
+    resultado = [{
+        'id': empresa.id,
+        'nome': empresa.nome,
+        'tipo': 'matriz' if empresa.is_matriz else ('filial' if empresa.is_filial else 'standalone'),
+        'current': True,
+    }]
+
+    if getattr(request.user, 'nivel', None) == 'diretor' and empresa.is_matriz:
+        for filial in empresa.filiais.all().order_by('nome'):
+            if filial.id not in ids_incluidos:
+                ids_incluidos.add(filial.id)
+                resultado.append({
+                    'id': filial.id,
+                    'nome': filial.nome,
+                    'tipo': 'filial',
+                    'current': False,
+                })
+
+    # Empresas adicionais concedidas pelo CEO
+    from .models import PermissaoGranular
+    perm = PermissaoGranular.objects.filter(usuario=request.user).first()
+    if perm:
+        for emp_adicional in perm.empresas_adicionais.order_by('nome'):
+            if emp_adicional.id not in ids_incluidos:
+                ids_incluidos.add(emp_adicional.id)
+                resultado.append({
+                    'id': emp_adicional.id,
+                    'nome': emp_adicional.nome,
+                    'tipo': 'adicional',
+                    'current': False,
+                })
+
+    return Response(resultado)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -3872,6 +5072,69 @@ class GrupoClienteViewSet(viewsets.ModelViewSet):
         serializer.save(empresa_id=empresa_id)
 
 
+class FornecedorViewSet(ExportMixin, viewsets.ModelViewSet):
+    serializer_class = FornecedorSerializer
+    export_titulo = 'Fornecedores'
+    export_filename = 'fornecedores'
+    export_colunas = [
+        (lambda o: o.nome_razao,   'Nome / Razão Social'),
+        (lambda o: o.cnpj or '',   'CNPJ'),
+    ]
+
+    def get_queryset(self):
+        empresa_id = _get_empresa_id(self.request)
+        qs = Fornecedor.objects.filter(empresa_id=empresa_id)
+        busca = self.request.query_params.get('busca')
+        if busca:
+            qs = qs.filter(
+                Q(nome_razao__icontains=busca) | Q(cnpj__icontains=busca)
+            )
+        return qs.order_by('nome_razao')
+
+    def _tem_permissao_edicao(self, request):
+        nivel = getattr(request.user, 'nivel', None)
+        if nivel in ['diretor', 'gerente']:
+            return True
+        perm = _get_perm(request.user)
+        return perm is not None and perm.editar_clientes
+
+    def create(self, request, *args, **kwargs):
+        if not self._tem_permissao_edicao(request):
+            return Response({'erro': 'Sem permissão para criar fornecedores.'}, status=403)
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        empresa_id = _get_empresa_id(self.request)
+        serializer.save(empresa_id=empresa_id)
+        LogComportamental.registrar(
+            request=self.request,
+            acao='alterou_cadastro',
+            descricao=f'Fornecedor "{serializer.instance.nome_razao}" criado',
+            modelo_afetado='Fornecedor',
+            id_afetado=serializer.instance.id,
+        )
+
+    def update(self, request, *args, **kwargs):
+        if not self._tem_permissao_edicao(request):
+            return Response({'erro': 'Sem permissão para editar fornecedores.'}, status=403)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    def perform_update(self, serializer):
+        obj = self.get_object()
+        serializer.save(empresa_id=_get_empresa_id(self.request))
+        LogComportamental.registrar(
+            request=self.request,
+            acao='alterou_cadastro',
+            descricao=f'Fornecedor "{obj.nome_razao}" editado',
+            modelo_afetado='Fornecedor',
+            id_afetado=obj.id,
+        )
+
+
 class TabelaPrecoViewSet(viewsets.ModelViewSet):
     serializer_class = TabelaPrecoSerializer
 
@@ -3879,9 +5142,36 @@ class TabelaPrecoViewSet(viewsets.ModelViewSet):
         empresa_id = _get_empresa_id(self.request)
         return TabelaPreco.objects.filter(empresa_id=empresa_id).order_by('nome')
 
+    def _check_write(self, request):
+        nivel = getattr(request.user, 'nivel', None)
+        if nivel not in ['diretor', 'gerente']:
+            return Response({'erro': 'Apenas diretor ou gerente pode alterar tabelas de preço.'}, status=403)
+        return None
+
+    def create(self, request, *args, **kwargs):
+        err = self._check_write(request)
+        if err:
+            return err
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
-        empresa_id = _get_empresa_id(self.request)
-        serializer.save(empresa_id=empresa_id)
+        serializer.save(empresa_id=_get_empresa_id(self.request))
+
+    def update(self, request, *args, **kwargs):
+        err = self._check_write(request)
+        if err:
+            return err
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    def destroy(self, request, *args, **kwargs):
+        err = self._check_write(request)
+        if err:
+            return err
+        return super().destroy(request, *args, **kwargs)
 
 
 @api_view(['GET', 'POST'])
@@ -3894,6 +5184,9 @@ def api_itens_tabela_preco(request, tabela_id):
         itens = ItemTabelaPreco.objects.filter(tabela=tabela).select_related('produto')
         from .serializers import ItemTabelaPrecoSerializer
         return Response(ItemTabelaPrecoSerializer(itens, many=True).data)
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ['diretor', 'gerente']:
+        return Response({'erro': 'Apenas diretor ou gerente pode alterar itens de tabela de preço.'}, status=403)
     serializer = ItemTabelaPrecoSerializer(data={**request.data, 'tabela': tabela.id})
     if serializer.is_valid():
         serializer.save()
@@ -4675,3 +5968,731 @@ def api_contratos_alertas(request):
     if not _nivel_contrato(nivel):
         return Response({'erro': 'Acesso negado.'}, status=403)
     return Response(alertas_contratos(_get_empresa_id(request)))
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RASTREABILIDADE — Aplicação de Insumos por Talhão
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET', 'POST'])
+def api_aplicacoes_insumo(request):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+
+    if request.method == 'GET':
+        qs = AplicacaoInsumo.objects.filter(empresa_id=empresa_id).select_related(
+            'talhao', 'produto', 'lote', 'operador'
+        )
+        talhao_id = request.query_params.get('talhao_id')
+        produto_id = request.query_params.get('produto_id')
+        safra = request.query_params.get('safra')
+        data_inicio = request.query_params.get('data_inicio')
+        data_fim = request.query_params.get('data_fim')
+
+        if talhao_id:
+            qs = qs.filter(talhao_id=talhao_id)
+        if produto_id:
+            qs = qs.filter(produto_id=produto_id)
+        if safra:
+            qs = qs.filter(safra__icontains=safra)
+        if data_inicio:
+            qs = qs.filter(data_aplicacao__gte=data_inicio)
+        if data_fim:
+            qs = qs.filter(data_aplicacao__lte=data_fim)
+
+        dados = [{
+            'id': a.id,
+            'talhao_id': a.talhao_id,
+            'talhao_nome': a.talhao.nome,
+            'gleba_nome': a.talhao.gleba.nome if hasattr(a.talhao, 'gleba') and a.talhao.gleba else None,
+            'produto_id': a.produto_id,
+            'produto_nome': a.produto.nome,
+            'produto_sku': a.produto.sku,
+            'lote_id': a.lote_id,
+            'lote_numero': a.lote.numero_lote if a.lote else None,
+            'quantidade': float(a.quantidade),
+            'unidade_medida': a.unidade_medida or a.produto.unidade_medida,
+            'data_aplicacao': a.data_aplicacao.isoformat(),
+            'operador_nome': a.operador.get_full_name() if a.operador else None,
+            'safra': a.safra,
+            'cultura': a.cultura,
+            'numero_receita_agronomica': a.numero_receita_agronomica,
+            'crea_responsavel': a.crea_responsavel,
+            'observacoes': a.observacoes,
+            'criado_em': a.criado_em.isoformat(),
+        } for a in qs.order_by('-data_aplicacao')]
+        return Response(dados)
+
+    # POST — qualquer nível exceto diretor pode registrar (operacional e vendedor também)
+    data = request.data
+    talhao_id = data.get('talhao_id')
+    produto_id = data.get('produto_id')
+    quantidade = data.get('quantidade')
+    data_aplicacao = data.get('data_aplicacao')
+
+    if not all([talhao_id, produto_id, quantidade, data_aplicacao]):
+        return Response({'erro': 'talhao_id, produto_id, quantidade e data_aplicacao são obrigatórios.'}, status=400)
+
+    try:
+        talhao = Talhao.objects.get(id=talhao_id)
+        # Valida que o talhão pertence a uma fazenda da empresa
+        if talhao.gleba.fazenda.empresa_id != empresa_id:
+            return Response({'erro': 'Talhão não pertence à empresa.'}, status=403)
+    except Talhao.DoesNotExist:
+        return Response({'erro': 'Talhão não encontrado.'}, status=404)
+
+    try:
+        produto = Produto.objects.get(id=produto_id, empresa_id=empresa_id)
+    except Produto.DoesNotExist:
+        return Response({'erro': 'Produto não encontrado.'}, status=404)
+
+    lote = None
+    lote_id = data.get('lote_id')
+    if lote_id:
+        try:
+            lote = LoteEstoque.objects.get(id=lote_id, produto=produto)
+        except LoteEstoque.DoesNotExist:
+            return Response({'erro': 'Lote não encontrado para este produto.'}, status=404)
+
+    aplicacao = AplicacaoInsumo.objects.create(
+        empresa_id=empresa_id,
+        talhao=talhao,
+        produto=produto,
+        lote=lote,
+        quantidade=quantidade,
+        unidade_medida=data.get('unidade_medida', ''),
+        data_aplicacao=data_aplicacao,
+        operador=request.user,
+        safra=data.get('safra', ''),
+        cultura=data.get('cultura', ''),
+        numero_receita_agronomica=data.get('numero_receita_agronomica', ''),
+        crea_responsavel=data.get('crea_responsavel', ''),
+        observacoes=data.get('observacoes', ''),
+    )
+
+    from .models import Empresa as EmpresaModel
+    LogAuditoria.registrar(
+        empresa=EmpresaModel.objects.get(id=empresa_id),
+        usuario=request.user,
+        acao='criacao',
+        modelo_afetado='AplicacaoInsumo',
+        registro_id=aplicacao.id,
+        descricao=f'Aplicação de {produto.nome} no talhão {talhao.nome} registrada.',
+    )
+
+    return Response({'id': aplicacao.id, 'mensagem': 'Aplicação registrada com sucesso.'}, status=201)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def api_aplicacao_insumo_detalhe(request, aplicacao_id):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+
+    try:
+        aplicacao = AplicacaoInsumo.objects.get(id=aplicacao_id, empresa_id=empresa_id)
+    except AplicacaoInsumo.DoesNotExist:
+        return Response({'erro': 'Aplicação não encontrada.'}, status=404)
+
+    if request.method == 'GET':
+        return Response({
+            'id': aplicacao.id,
+            'talhao_id': aplicacao.talhao_id,
+            'talhao_nome': aplicacao.talhao.nome,
+            'produto_id': aplicacao.produto_id,
+            'produto_nome': aplicacao.produto.nome,
+            'lote_id': aplicacao.lote_id,
+            'lote_numero': aplicacao.lote.numero_lote if aplicacao.lote else None,
+            'quantidade': float(aplicacao.quantidade),
+            'unidade_medida': aplicacao.unidade_medida,
+            'data_aplicacao': aplicacao.data_aplicacao.isoformat(),
+            'safra': aplicacao.safra,
+            'cultura': aplicacao.cultura,
+            'numero_receita_agronomica': aplicacao.numero_receita_agronomica,
+            'crea_responsavel': aplicacao.crea_responsavel,
+            'observacoes': aplicacao.observacoes,
+        })
+
+    if request.method == 'PATCH':
+        if nivel not in ('diretor', 'gerente', 'administrativo'):
+            return Response({'erro': 'Apenas gerente ou diretor podem editar aplicações.'}, status=403)
+        campos_editaveis = ('quantidade', 'unidade_medida', 'data_aplicacao', 'safra',
+                            'cultura', 'numero_receita_agronomica', 'crea_responsavel', 'observacoes')
+        for campo in campos_editaveis:
+            if campo in request.data:
+                setattr(aplicacao, campo, request.data[campo])
+        aplicacao.save()
+        return Response({'mensagem': 'Aplicação atualizada.'})
+
+    if request.method == 'DELETE':
+        if nivel not in ('diretor',):
+            return Response({'erro': 'Apenas o diretor pode excluir aplicações.'}, status=403)
+        aplicacao.delete()
+        return Response({'mensagem': 'Aplicação excluída.'})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLANO DE CONTAS — Contabilidade Gerencial
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET', 'POST'])
+def api_grupos_contabeis(request):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+
+    if request.method == 'GET':
+        qs = GrupoContabil.objects.filter(
+            models.Q(empresa_id=empresa_id) | models.Q(empresa__isnull=True)
+        ).order_by('codigo')
+        dados = [{
+            'id': g.id,
+            'codigo': g.codigo,
+            'nome': g.nome,
+            'parent_id': g.parent_id,
+            'parent_nome': g.parent.nome if g.parent else None,
+            'empresa_id': g.empresa_id,
+            'sistema': g.empresa_id is None,
+        } for g in qs]
+        return Response(dados)
+
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    codigo = request.data.get('codigo')
+    nome = request.data.get('nome')
+    if not codigo or not nome:
+        return Response({'erro': 'codigo e nome são obrigatórios.'}, status=400)
+
+    grupo = GrupoContabil.objects.create(
+        empresa_id=empresa_id,
+        codigo=codigo,
+        nome=nome,
+        parent_id=request.data.get('parent_id'),
+    )
+    return Response({'id': grupo.id, 'mensagem': 'Grupo contábil criado.'}, status=201)
+
+
+@api_view(['GET', 'POST'])
+def api_contas_contabeis(request):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    if request.method == 'GET':
+        qs = ContaContabil.objects.filter(
+            models.Q(empresa_id=empresa_id) | models.Q(empresa__isnull=True)
+        ).select_related('grupo').order_by('codigo')
+
+        tipo_filtro = request.query_params.get('tipo')
+        classe_filtro = request.query_params.get('classe')
+        grupo_id = request.query_params.get('grupo_id')
+        busca = request.query_params.get('q')
+
+        if tipo_filtro:
+            qs = qs.filter(tipo=tipo_filtro)
+        if classe_filtro:
+            qs = qs.filter(classe=classe_filtro)
+        if grupo_id:
+            qs = qs.filter(grupo_id=grupo_id)
+        if busca:
+            qs = qs.filter(models.Q(nome__icontains=busca) | models.Q(codigo__icontains=busca))
+
+        dados = [{
+            'id': c.id,
+            'codigo': c.codigo,
+            'nome': c.nome,
+            'tipo': c.tipo,
+            'tipo_label': c.get_tipo_display(),
+            'classe': c.classe,
+            'classe_label': c.get_classe_display(),
+            'grupo_id': c.grupo_id,
+            'grupo_nome': c.grupo.nome if c.grupo else None,
+            'aceita_lancamento': c.aceita_lancamento,
+            'ativo': c.ativo,
+            'empresa_id': c.empresa_id,
+            'sistema': c.empresa_id is None,
+        } for c in qs]
+        return Response(dados)
+
+    codigo = request.data.get('codigo')
+    nome = request.data.get('nome')
+    tipo = request.data.get('tipo')
+    classe = request.data.get('classe')
+    if not all([codigo, nome, tipo, classe]):
+        return Response({'erro': 'codigo, nome, tipo e classe são obrigatórios.'}, status=400)
+
+    if ContaContabil.objects.filter(empresa_id=empresa_id, codigo=codigo).exists():
+        return Response({'erro': 'Já existe uma conta com este código para esta empresa.'}, status=400)
+
+    conta = ContaContabil.objects.create(
+        empresa_id=empresa_id,
+        grupo_id=request.data.get('grupo_id'),
+        codigo=codigo,
+        nome=nome,
+        tipo=tipo,
+        classe=classe,
+        aceita_lancamento=request.data.get('aceita_lancamento', True),
+    )
+    return Response({'id': conta.id, 'mensagem': 'Conta contábil criada.'}, status=201)
+
+
+@api_view(['GET', 'PATCH', 'DELETE'])
+def api_conta_contabil_detalhe(request, conta_id):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    try:
+        conta = ContaContabil.objects.get(id=conta_id)
+        if conta.empresa_id and conta.empresa_id != empresa_id:
+            return Response({'erro': 'Acesso negado.'}, status=403)
+    except ContaContabil.DoesNotExist:
+        return Response({'erro': 'Conta não encontrada.'}, status=404)
+
+    if request.method == 'GET':
+        return Response({
+            'id': conta.id, 'codigo': conta.codigo, 'nome': conta.nome,
+            'tipo': conta.tipo, 'tipo_label': conta.get_tipo_display(),
+            'classe': conta.classe, 'classe_label': conta.get_classe_display(),
+            'grupo_id': conta.grupo_id, 'aceita_lancamento': conta.aceita_lancamento,
+            'ativo': conta.ativo,
+        })
+
+    if conta.empresa_id is None:
+        return Response({'erro': 'Contas do sistema não podem ser alteradas.'}, status=403)
+
+    if request.method == 'PATCH':
+        for campo in ('nome', 'tipo', 'classe', 'grupo_id', 'aceita_lancamento', 'ativo'):
+            if campo in request.data:
+                setattr(conta, campo, request.data[campo])
+        conta.save()
+        return Response({'mensagem': 'Conta atualizada.'})
+
+    if request.method == 'DELETE':
+        if nivel != 'diretor':
+            return Response({'erro': 'Apenas o diretor pode excluir contas contábeis.'}, status=403)
+        conta.delete()
+        return Response({'mensagem': 'Conta excluída.'})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PRODUÇÃO — Ordens de Produção (Indústrias)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _check_industria(request):
+    empresa_id = _get_empresa_id(request)
+    from .models import Empresa as EmpresaModel
+    try:
+        emp = EmpresaModel.objects.get(id=empresa_id)
+        if emp.tipo_negocio != 'industria':
+            return None, Response({'erro': 'Módulo de produção disponível apenas para indústrias.'}, status=403)
+    except EmpresaModel.DoesNotExist:
+        return None, Response({'erro': 'Empresa não encontrada.'}, status=404)
+    return empresa_id, None
+
+
+@api_view(['GET', 'POST'])
+def api_ordens_producao(request):
+    empresa_id, err = _check_industria(request)
+    if err:
+        return err
+    nivel = getattr(request.user, 'nivel', None)
+
+    if request.method == 'GET':
+        qs = OrdemProducao.objects.filter(empresa_id=empresa_id).select_related(
+            'produto_final', 'responsavel'
+        )
+        status_filtro = request.query_params.get('status')
+        produto_id = request.query_params.get('produto_id')
+        if status_filtro:
+            qs = qs.filter(status=status_filtro)
+        if produto_id:
+            qs = qs.filter(produto_final_id=produto_id)
+
+        dados = [{
+            'id': op.id,
+            'numero': op.numero,
+            'produto_final_id': op.produto_final_id,
+            'produto_final_nome': op.produto_final.nome,
+            'quantidade_planejada': float(op.quantidade_planejada),
+            'quantidade_produzida': float(op.quantidade_produzida),
+            'percentual_conclusao': op.percentual_conclusao,
+            'status': op.status,
+            'status_label': op.get_status_display(),
+            'data_prevista': op.data_prevista.isoformat(),
+            'data_inicio': op.data_inicio.isoformat() if op.data_inicio else None,
+            'data_conclusao': op.data_conclusao.isoformat() if op.data_conclusao else None,
+            'responsavel_nome': op.responsavel.get_full_name() if op.responsavel else None,
+            'criado_em': op.criado_em.isoformat(),
+        } for op in qs.order_by('-criado_em')]
+        return Response(dados)
+
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado para criar ordens de produção.'}, status=403)
+
+    numero = request.data.get('numero')
+    produto_final_id = request.data.get('produto_final_id')
+    quantidade_planejada = request.data.get('quantidade_planejada')
+    data_prevista = request.data.get('data_prevista')
+
+    if not all([numero, produto_final_id, quantidade_planejada, data_prevista]):
+        return Response({'erro': 'numero, produto_final_id, quantidade_planejada e data_prevista são obrigatórios.'}, status=400)
+
+    if OrdemProducao.objects.filter(empresa_id=empresa_id, numero=numero).exists():
+        return Response({'erro': 'Já existe uma OP com este número.'}, status=400)
+
+    try:
+        produto_final = Produto.objects.get(id=produto_final_id, empresa_id=empresa_id)
+    except Produto.DoesNotExist:
+        return Response({'erro': 'Produto não encontrado.'}, status=404)
+
+    op = OrdemProducao.objects.create(
+        empresa_id=empresa_id,
+        numero=numero,
+        produto_final=produto_final,
+        quantidade_planejada=quantidade_planejada,
+        data_prevista=data_prevista,
+        responsavel=request.user,
+        observacoes=request.data.get('observacoes', ''),
+    )
+
+    insumos_data = request.data.get('insumos', [])
+    for ins in insumos_data:
+        try:
+            prod = Produto.objects.get(id=ins.get('produto_id'), empresa_id=empresa_id)
+            ItemOrdemProducao.objects.create(
+                ordem=op,
+                produto=prod,
+                lote_id=ins.get('lote_id'),
+                quantidade_planejada=ins.get('quantidade_planejada', 0),
+            )
+        except Produto.DoesNotExist:
+            pass
+
+    from .models import Empresa as EmpresaModel
+    LogAuditoria.registrar(
+        empresa=EmpresaModel.objects.get(id=empresa_id),
+        usuario=request.user,
+        acao='criacao',
+        modelo_afetado='OrdemProducao',
+        registro_id=op.id,
+        descricao=f'OP {op.numero} criada para {produto_final.nome}.',
+    )
+    return Response({'id': op.id, 'numero': op.numero, 'mensagem': 'Ordem de produção criada.'}, status=201)
+
+
+@api_view(['GET', 'PATCH'])
+def api_ordem_producao_detalhe(request, op_id):
+    empresa_id, err = _check_industria(request)
+    if err:
+        return err
+    nivel = getattr(request.user, 'nivel', None)
+
+    try:
+        op = OrdemProducao.objects.get(id=op_id, empresa_id=empresa_id)
+    except OrdemProducao.DoesNotExist:
+        return Response({'erro': 'Ordem de produção não encontrada.'}, status=404)
+
+    if request.method == 'GET':
+        insumos = [{
+            'id': item.id,
+            'produto_id': item.produto_id,
+            'produto_nome': item.produto.nome,
+            'lote_id': item.lote_id,
+            'lote_numero': item.lote.numero_lote if item.lote else None,
+            'quantidade_planejada': float(item.quantidade_planejada),
+            'quantidade_consumida': float(item.quantidade_consumida),
+        } for item in op.insumos.select_related('produto', 'lote').all()]
+        return Response({
+            'id': op.id, 'numero': op.numero,
+            'produto_final_id': op.produto_final_id,
+            'produto_final_nome': op.produto_final.nome,
+            'quantidade_planejada': float(op.quantidade_planejada),
+            'quantidade_produzida': float(op.quantidade_produzida),
+            'percentual_conclusao': op.percentual_conclusao,
+            'status': op.status,
+            'status_label': op.get_status_display(),
+            'data_prevista': op.data_prevista.isoformat(),
+            'data_inicio': op.data_inicio.isoformat() if op.data_inicio else None,
+            'data_conclusao': op.data_conclusao.isoformat() if op.data_conclusao else None,
+            'responsavel_nome': op.responsavel.get_full_name() if op.responsavel else None,
+            'observacoes': op.observacoes,
+            'insumos': insumos,
+        })
+
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    novo_status = request.data.get('status')
+    quantidade_produzida = request.data.get('quantidade_produzida')
+
+    if novo_status:
+        transicoes_validas = {
+            'rascunho': ['liberada', 'cancelada'],
+            'liberada': ['em_producao', 'cancelada'],
+            'em_producao': ['concluida', 'cancelada'],
+            'concluida': [],
+            'cancelada': [],
+        }
+        if novo_status not in transicoes_validas.get(op.status, []):
+            return Response({'erro': f'Transição {op.status} → {novo_status} não permitida.'}, status=400)
+
+        op.status = novo_status
+        if novo_status == 'em_producao' and not op.data_inicio:
+            op.data_inicio = timezone.now()
+        if novo_status == 'concluida':
+            op.data_conclusao = timezone.now()
+
+    if quantidade_produzida is not None:
+        op.quantidade_produzida = quantidade_produzida
+
+    for campo in ('observacoes', 'data_prevista'):
+        if campo in request.data:
+            setattr(op, campo, request.data[campo])
+
+    op.save()
+    from .models import Empresa as EmpresaModel
+    LogAuditoria.registrar(
+        empresa=EmpresaModel.objects.get(id=empresa_id),
+        usuario=request.user,
+        acao='edicao',
+        modelo_afetado='OrdemProducao',
+        registro_id=op.id,
+        descricao=f'OP {op.numero} atualizada — status: {op.status}.',
+    )
+    return Response({'mensagem': 'Ordem de produção atualizada.', 'status': op.status})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BENEFICIAMENTO — Transformação de Lotes (Indústrias)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET', 'POST'])
+def api_beneficiamentos(request):
+    empresa_id, err = _check_industria(request)
+    if err:
+        return err
+    nivel = getattr(request.user, 'nivel', None)
+
+    if request.method == 'GET':
+        qs = BeneficiamentoLote.objects.filter(empresa_id=empresa_id).select_related(
+            'produto_entrada', 'produto_saida', 'lote_entrada', 'operador'
+        )
+        status_filtro = request.query_params.get('status')
+        if status_filtro:
+            qs = qs.filter(status=status_filtro)
+
+        dados = [{
+            'id': b.id,
+            'produto_entrada_id': b.produto_entrada_id,
+            'produto_entrada_nome': b.produto_entrada.nome,
+            'lote_entrada_id': b.lote_entrada_id,
+            'lote_entrada_numero': b.lote_entrada.numero_lote if b.lote_entrada else None,
+            'quantidade_entrada': float(b.quantidade_entrada),
+            'produto_saida_id': b.produto_saida_id,
+            'produto_saida_nome': b.produto_saida.nome if b.produto_saida else None,
+            'quantidade_saida': float(b.quantidade_saida),
+            'rendimento_percentual': float(b.rendimento_percentual),
+            'status': b.status,
+            'status_label': b.get_status_display(),
+            'data_inicio': b.data_inicio.isoformat(),
+            'data_conclusao': b.data_conclusao.isoformat() if b.data_conclusao else None,
+            'operador_nome': b.operador.get_full_name() if b.operador else None,
+            'criado_em': b.criado_em.isoformat(),
+        } for b in qs.order_by('-criado_em')]
+        return Response(dados)
+
+    if nivel not in ('diretor', 'gerente', 'administrativo', 'operacional'):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    produto_entrada_id = request.data.get('produto_entrada_id')
+    quantidade_entrada = request.data.get('quantidade_entrada')
+    data_inicio = request.data.get('data_inicio')
+
+    if not all([produto_entrada_id, quantidade_entrada, data_inicio]):
+        return Response({'erro': 'produto_entrada_id, quantidade_entrada e data_inicio são obrigatórios.'}, status=400)
+
+    try:
+        produto_entrada = Produto.objects.get(id=produto_entrada_id, empresa_id=empresa_id)
+    except Produto.DoesNotExist:
+        return Response({'erro': 'Produto de entrada não encontrado.'}, status=404)
+
+    benef = BeneficiamentoLote.objects.create(
+        empresa_id=empresa_id,
+        produto_entrada=produto_entrada,
+        lote_entrada_id=request.data.get('lote_entrada_id'),
+        quantidade_entrada=quantidade_entrada,
+        produto_saida_id=request.data.get('produto_saida_id'),
+        quantidade_saida=request.data.get('quantidade_saida', 0),
+        data_inicio=data_inicio,
+        operador=request.user,
+        observacoes=request.data.get('observacoes', ''),
+    )
+    return Response({'id': benef.id, 'mensagem': 'Beneficiamento registrado.'}, status=201)
+
+
+@api_view(['GET', 'PATCH'])
+def api_beneficiamento_detalhe(request, benef_id):
+    empresa_id, err = _check_industria(request)
+    if err:
+        return err
+    nivel = getattr(request.user, 'nivel', None)
+
+    try:
+        benef = BeneficiamentoLote.objects.get(id=benef_id, empresa_id=empresa_id)
+    except BeneficiamentoLote.DoesNotExist:
+        return Response({'erro': 'Beneficiamento não encontrado.'}, status=404)
+
+    if request.method == 'GET':
+        return Response({
+            'id': benef.id,
+            'produto_entrada_nome': benef.produto_entrada.nome,
+            'lote_entrada_numero': benef.lote_entrada.numero_lote if benef.lote_entrada else None,
+            'quantidade_entrada': float(benef.quantidade_entrada),
+            'produto_saida_nome': benef.produto_saida.nome if benef.produto_saida else None,
+            'quantidade_saida': float(benef.quantidade_saida),
+            'rendimento_percentual': float(benef.rendimento_percentual),
+            'status': benef.status,
+            'status_label': benef.get_status_display(),
+            'data_inicio': benef.data_inicio.isoformat(),
+            'data_conclusao': benef.data_conclusao.isoformat() if benef.data_conclusao else None,
+            'lote_saida_gerado_id': benef.lote_saida_gerado_id,
+            'observacoes': benef.observacoes,
+        })
+
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado para editar beneficiamento.'}, status=403)
+
+    for campo in ('produto_saida_id', 'quantidade_saida', 'data_conclusao',
+                  'status', 'lote_saida_gerado_id', 'observacoes'):
+        if campo in request.data:
+            setattr(benef, campo, request.data[campo])
+
+    benef.save()
+    return Response({'mensagem': 'Beneficiamento atualizado.', 'rendimento_percentual': float(benef.rendimento_percentual)})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAPA CONTÁBIL — Configuração de operações → contas
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET', 'POST'])
+def api_mapa_contabil(request):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    if request.method == 'GET':
+        qs = MapaContabil.objects.filter(empresa_id=empresa_id).select_related(
+            'conta_debito', 'conta_credito'
+        )
+        return Response([{
+            'id': m.id,
+            'tipo_operacao': m.tipo_operacao,
+            'tipo_operacao_label': m.get_tipo_operacao_display(),
+            'conta_debito_id': m.conta_debito_id,
+            'conta_debito': f"{m.conta_debito.codigo} — {m.conta_debito.nome}",
+            'conta_credito_id': m.conta_credito_id,
+            'conta_credito': f"{m.conta_credito.codigo} — {m.conta_credito.nome}",
+            'ativo': m.ativo,
+        } for m in qs])
+
+    # POST
+    tipo = request.data.get('tipo_operacao')
+    debito_id = request.data.get('conta_debito_id')
+    credito_id = request.data.get('conta_credito_id')
+    if not all([tipo, debito_id, credito_id]):
+        return Response({'erro': 'tipo_operacao, conta_debito_id e conta_credito_id são obrigatórios.'}, status=400)
+
+    validos = [c[0] for c in MapaContabil.OPERACAO_CHOICES]
+    if tipo not in validos:
+        return Response({'erro': f'tipo_operacao inválido. Opções: {validos}'}, status=400)
+
+    mapa, created = MapaContabil.objects.update_or_create(
+        empresa_id=empresa_id,
+        tipo_operacao=tipo,
+        defaults={
+            'conta_debito_id': debito_id,
+            'conta_credito_id': credito_id,
+            'ativo': request.data.get('ativo', True),
+        },
+    )
+    return Response({'id': mapa.id, 'criado': created, 'mensagem': 'Mapeamento salvo.'}, status=201 if created else 200)
+
+
+@api_view(['DELETE'])
+def api_mapa_contabil_detalhe(request, mapa_id):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel != 'diretor':
+        return Response({'erro': 'Apenas o Diretor pode remover mapeamentos.'}, status=403)
+    try:
+        mapa = MapaContabil.objects.get(id=mapa_id, empresa_id=empresa_id)
+    except MapaContabil.DoesNotExist:
+        return Response({'erro': 'Mapeamento não encontrado.'}, status=404)
+    mapa.delete()
+    return Response({'mensagem': 'Mapeamento removido.'})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# LANÇAMENTOS CONTÁBEIS — Consulta do razão (append-only)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@api_view(['GET', 'POST'])
+def api_lancamentos_contabeis(request):
+    empresa_id = _get_empresa_id(request)
+    nivel = getattr(request.user, 'nivel', None)
+    if nivel not in ('diretor', 'gerente', 'administrativo'):
+        return Response({'erro': 'Acesso negado.'}, status=403)
+
+    if request.method == 'GET':
+        qs = LancamentoContabil.objects.filter(empresa_id=empresa_id).select_related(
+            'conta_debito', 'conta_credito'
+        )
+        data_inicio = request.query_params.get('data_inicio')
+        data_fim = request.query_params.get('data_fim')
+        conta_id = request.query_params.get('conta_id')
+        origem_tipo = request.query_params.get('origem_tipo')
+        if data_inicio:
+            qs = qs.filter(data__gte=data_inicio)
+        if data_fim:
+            qs = qs.filter(data__lte=data_fim)
+        if conta_id:
+            qs = qs.filter(
+                models.Q(conta_debito_id=conta_id) | models.Q(conta_credito_id=conta_id)
+            )
+        if origem_tipo:
+            qs = qs.filter(origem_tipo=origem_tipo)
+        return Response([{
+            'id': lc.id,
+            'data': lc.data.isoformat(),
+            'conta_debito': f"{lc.conta_debito.codigo} — {lc.conta_debito.nome}",
+            'conta_credito': f"{lc.conta_credito.codigo} — {lc.conta_credito.nome}",
+            'valor': float(lc.valor),
+            'historico': lc.historico,
+            'origem_tipo': lc.origem_tipo,
+            'origem_id': lc.origem_id,
+            'criado_em': lc.criado_em.isoformat(),
+        } for lc in qs])
+
+    # POST — lançamento manual (diretor/gerente/administrativo)
+    required = ['data', 'conta_debito_id', 'conta_credito_id', 'valor', 'historico']
+    for field in required:
+        if not request.data.get(field):
+            return Response({'erro': f'Campo obrigatório: {field}'}, status=400)
+
+    lc = LancamentoContabil.objects.create(
+        empresa_id=empresa_id,
+        data=request.data['data'],
+        conta_debito_id=request.data['conta_debito_id'],
+        conta_credito_id=request.data['conta_credito_id'],
+        valor=request.data['valor'],
+        historico=request.data['historico'],
+        origem_tipo='manual',
+        origem_id=None,
+    )
+    return Response({'id': lc.id, 'mensagem': 'Lançamento contábil registrado.'}, status=201)

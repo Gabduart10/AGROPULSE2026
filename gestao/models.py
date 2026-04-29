@@ -352,8 +352,13 @@ class Cliente(models.Model):
     data_nascimento = models.DateField(blank=True, null=True)
     data_fundacao   = models.DateField(blank=True, null=True, verbose_name='Data de Fundação (PJ)')
     prazo_recompra  = models.PositiveIntegerField(null=True, blank=True, verbose_name='Prazo de recompra individual (dias)', help_text='Se vazio, usa o padrão da empresa.')
-    limite_credito  = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
-    ativo           = models.BooleanField(default=True)
+    limite_credito         = models.DecimalField(max_digits=15, decimal_places=2, default=0.00)
+    ativo                  = models.BooleanField(default=True)
+    vendedor_responsavel   = models.ForeignKey(
+        'Usuario', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='carteira_clientes',
+        verbose_name='Vendedor Responsável',
+    )
 
     @property
     def dias_sem_comprar(self):
@@ -669,6 +674,32 @@ class ContaPagar(models.Model):
     link_boleto = models.URLField(max_length=500, blank=True, null=True)
     linha_digitavel = models.CharField(max_length=100, blank=True, null=True)
 
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        if not is_new:
+            try:
+                original = ContaPagar.objects.get(pk=self.pk)
+                _status_anterior = original.status
+            except ContaPagar.DoesNotExist:
+                _status_anterior = None
+        else:
+            _status_anterior = None
+
+        super().save(*args, **kwargs)
+
+        # Gera lançamento contábil ao marcar como pago (uma única vez)
+        if self.status == 'pago' and _status_anterior != 'pago':
+            from django.utils import timezone
+            _gerar_lancamento_contabil(
+                empresa=self.empresa,
+                tipo_operacao='conta_pagar_paga',
+                valor=self.valor,
+                historico=f'Pagamento: {self.descricao}',
+                origem_tipo='conta_pagar',
+                origem_id=self.pk,
+                data=self.data_pagamento or timezone.localdate(),
+            )
+
     def __str__(self):
         fornecedor_nome = self.fornecedor.nome_razao if self.fornecedor else 'Sem Fornecedor'
         return f"{self.descricao} - {fornecedor_nome}"
@@ -693,6 +724,32 @@ class ContaReceber(models.Model):
     data_vencimento = models.DateField()
     data_recebimento = models.DateField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pendente')
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        if not is_new:
+            try:
+                original = ContaReceber.objects.get(pk=self.pk)
+                _status_anterior = original.status
+            except ContaReceber.DoesNotExist:
+                _status_anterior = None
+        else:
+            _status_anterior = None
+
+        super().save(*args, **kwargs)
+
+        # Gera lançamento contábil ao marcar como recebido (uma única vez)
+        if self.status == 'recebido' and _status_anterior != 'recebido':
+            from django.utils import timezone
+            _gerar_lancamento_contabil(
+                empresa=self.empresa,
+                tipo_operacao='conta_receber_recebida',
+                valor=self.valor,
+                historico=f'Recebimento: {self.descricao}',
+                origem_tipo='conta_receber',
+                origem_id=self.pk,
+                data=self.data_recebimento or timezone.localdate(),
+            )
 
     def __str__(self):
         # CORRIGIDO: era self.cliente.nome, agora usa nome_fantasia ou nome_razao
@@ -880,7 +937,10 @@ class LogAuditoria(models.Model):
         ('cancelamento_pdv', 'Cancelamento de Venda PDV'),
         ('acesso_superhost', 'Acesso SuperHost ao Ambiente'),
         ('bloqueio_empresa', 'Bloqueio/Desbloqueio de Empresa'),
-        ('alteracao_tipo_empresa', 'Alteração de Tipo de Empresa'),
+        ('alteracao_tipo_empresa',  'Alteração de Tipo de Empresa'),
+        ('transferencia_carteira',  'Transferência de Carteira'),
+        ('criacao',  'Criação de Registro'),
+        ('edicao',   'Edição de Registro'),
     ]
     empresa = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='logs_auditoria')
     usuario = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True)
@@ -894,6 +954,14 @@ class LogAuditoria(models.Model):
     justificativa = models.TextField(blank=True, null=True, verbose_name='Justificativa de acesso')
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     data_hora = models.DateTimeField(auto_now_add=True)
+
+    def delete(self, *args, **kwargs):
+        raise PermissionError('Logs de auditoria são imutáveis e não podem ser excluídos.')
+
+    def save(self, *args, **kwargs):
+        if self.pk:
+            raise PermissionError('Logs de auditoria são imutáveis e não podem ser editados.')
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"[{self.get_acao_display()}] {self.modelo_afetado} #{self.registro_id} por {self.usuario}"
@@ -945,6 +1013,41 @@ class MetaVendedor(models.Model):
         verbose_name = 'Meta do Vendedor'
         verbose_name_plural = 'Metas dos Vendedores'
         unique_together = ('usuario', 'mes', 'ano')
+
+
+class VisitaCliente(models.Model):
+    TIPO_CHOICES = [
+        ('presencial',  'Presencial'),
+        ('telefone',    'Ligação Telefônica'),
+        ('whatsapp',    'WhatsApp'),
+        ('email',       'E-mail'),
+        ('video',       'Videoconferência'),
+    ]
+    RESULTADO_CHOICES = [
+        ('positivo',    'Positivo'),
+        ('neutro',      'Neutro'),
+        ('negativo',    'Negativo'),
+        ('sem_contato', 'Sem Contato'),
+    ]
+
+    empresa         = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='visitas_clientes')
+    vendedor        = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name='visitas_realizadas')
+    cliente         = models.ForeignKey(Cliente, on_delete=models.CASCADE, related_name='visitas')
+    tipo            = models.CharField(max_length=15, choices=TIPO_CHOICES, default='presencial')
+    data_visita     = models.DateTimeField()
+    observacoes     = models.TextField(blank=True, default='')
+    resultado       = models.CharField(max_length=15, choices=RESULTADO_CHOICES, default='neutro')
+    proximo_contato = models.DateField(null=True, blank=True)
+    criado_em       = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Visita {self.vendedor.get_full_name()} → {self.cliente.nome_razao} ({self.data_visita.strftime('%d/%m/%Y')})"
+
+    class Meta:
+        verbose_name = 'Visita a Cliente'
+        verbose_name_plural = 'Visitas a Clientes'
+        ordering = ['-data_visita']
+
 
 # ==========================================
 # COLE NO FINAL DO SEU models.py
@@ -1291,6 +1394,16 @@ class PermissaoGranular(models.Model):
 
     # Log
     ver_log_comportamental = models.BooleanField(default=False, verbose_name='Ver log comportamental')
+
+    # Acesso multi-unidade — configurável pelo CEO para gerentes específicos
+    # Permite que um gerente veja o contexto de outra empresa do mesmo grupo.
+    empresas_adicionais = models.ManyToManyField(
+        'Empresa',
+        blank=True,
+        related_name='gerentes_com_acesso',
+        verbose_name='Empresas adicionais com acesso',
+        help_text='Empresas do grupo às quais este usuário tem acesso além da própria.',
+    )
 
     def __str__(self):
         return f"Permissões de {self.usuario.username}"
@@ -2124,6 +2237,18 @@ class Colaborador(models.Model):
     endereco        = models.TextField(blank=True, default='')
     observacoes     = models.TextField(blank=True, default='')
 
+    def save(self, *args, **kwargs):
+        # Sincroniza is_active do Usuario quando colaborador é inativado/reativado.
+        if self.pk and self.usuario_id:
+            try:
+                original = Colaborador.objects.get(pk=self.pk)
+                if original.status != self.status:
+                    ativo = self.status == 'ativo'
+                    Usuario.objects.filter(pk=self.usuario_id).update(is_active=ativo)
+            except Colaborador.DoesNotExist:
+                pass
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.nome_completo} — {self.get_cargo_display()}"
 
@@ -2956,3 +3081,346 @@ class EntregaTermo(models.Model):
     class Meta:
         verbose_name = 'Entrega a Termo'
         ordering = ['data_entrega']
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RASTREABILIDADE AGRÍCOLA — Aplicação de Insumos por Talhão
+# ══════════════════════════════════════════════════════════════════════════════
+
+class AplicacaoInsumo(models.Model):
+    """
+    Registra a aplicação de insumos/defensivos em talhões específicos.
+    Mantém rastreabilidade do lote utilizado por área, obrigatória para
+    certificações e laudos agronômicos.
+    """
+    empresa        = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='aplicacoes_insumo')
+    talhao         = models.ForeignKey(Talhao, on_delete=models.CASCADE, related_name='aplicacoes')
+    produto        = models.ForeignKey(Produto, on_delete=models.PROTECT, related_name='aplicacoes_insumo')
+    lote           = models.ForeignKey(LoteEstoque, on_delete=models.SET_NULL, null=True, blank=True, related_name='aplicacoes')
+    quantidade     = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='Quantidade aplicada')
+    unidade_medida = models.CharField(max_length=10, blank=True, help_text='Unidade da aplicação (L/ha, kg/ha, etc.)')
+    data_aplicacao = models.DateField(verbose_name='Data da aplicação')
+    operador       = models.ForeignKey(
+        'Usuario', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='aplicacoes_registradas', verbose_name='Operador responsável'
+    )
+    safra          = models.CharField(max_length=20, blank=True, verbose_name='Safra')
+    cultura        = models.CharField(max_length=100, blank=True, verbose_name='Cultura aplicada')
+    numero_receita_agronomica = models.CharField(max_length=50, blank=True, verbose_name='N° Receita Agronômica')
+    crea_responsavel = models.CharField(max_length=30, blank=True, verbose_name='CREA do Responsável Técnico')
+    observacoes    = models.TextField(blank=True)
+    criado_em      = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Aplicação de Insumo'
+        verbose_name_plural = 'Aplicações de Insumos'
+        ordering = ['-data_aplicacao']
+
+    def __str__(self):
+        return f"{self.produto.nome} em {self.talhao.nome} — {self.data_aplicacao}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLANO DE CONTAS — Contabilidade Gerencial
+# ══════════════════════════════════════════════════════════════════════════════
+
+class GrupoContabil(models.Model):
+    """Agrupador hierárquico de contas contábeis (ex: 1 Ativo, 1.1 Circulante)."""
+    empresa = models.ForeignKey(
+        Empresa, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='grupos_contabeis',
+        help_text='Null = grupo padrão do sistema compartilhado por todas as empresas.'
+    )
+    codigo  = models.CharField(max_length=20, verbose_name='Código')
+    nome    = models.CharField(max_length=150, verbose_name='Nome')
+    parent  = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='subgrupos', verbose_name='Grupo pai'
+    )
+
+    class Meta:
+        verbose_name = 'Grupo Contábil'
+        verbose_name_plural = 'Grupos Contábeis'
+        ordering = ['codigo']
+
+    def __str__(self):
+        return f"{self.codigo} — {self.nome}"
+
+
+class ContaContabil(models.Model):
+    TIPO_CHOICES = [
+        ('receita',   'Receita'),
+        ('despesa',   'Despesa'),
+        ('ativo',     'Ativo'),
+        ('passivo',   'Passivo'),
+        ('resultado', 'Resultado / Apuração'),
+    ]
+    CLASSE_CHOICES = [
+        ('1', '1 - Ativo'),
+        ('2', '2 - Passivo'),
+        ('3', '3 - Patrimônio Líquido'),
+        ('4', '4 - Receita'),
+        ('5', '5 - Despesa'),
+        ('6', '6 - Resultado'),
+    ]
+
+    empresa            = models.ForeignKey(
+        Empresa, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='contas_contabeis',
+        help_text='Null = conta padrão do sistema.'
+    )
+    grupo              = models.ForeignKey(
+        GrupoContabil, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='contas'
+    )
+    codigo             = models.CharField(max_length=20, verbose_name='Código')
+    nome               = models.CharField(max_length=200, verbose_name='Nome da conta')
+    tipo               = models.CharField(max_length=20, choices=TIPO_CHOICES)
+    classe             = models.CharField(max_length=2, choices=CLASSE_CHOICES)
+    aceita_lancamento  = models.BooleanField(default=True, verbose_name='Aceita lançamento direto')
+    ativo              = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Conta Contábil'
+        verbose_name_plural = 'Contas Contábeis'
+        ordering = ['codigo']
+        unique_together = [('empresa', 'codigo')]
+
+    def __str__(self):
+        return f"{self.codigo} — {self.nome}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PRODUÇÃO E BENEFICIAMENTO — Exclusivo para tipo_negocio='industria'
+# ══════════════════════════════════════════════════════════════════════════════
+
+class OrdemProducao(models.Model):
+    STATUS_CHOICES = [
+        ('rascunho',    'Rascunho'),
+        ('liberada',    'Liberada para Produção'),
+        ('em_producao', 'Em Produção'),
+        ('concluida',   'Concluída'),
+        ('cancelada',   'Cancelada'),
+    ]
+
+    empresa              = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='ordens_producao')
+    numero               = models.CharField(max_length=50, verbose_name='Número da OP')
+    produto_final        = models.ForeignKey(
+        Produto, on_delete=models.PROTECT, related_name='ordens_como_produto_final',
+        verbose_name='Produto a produzir'
+    )
+    quantidade_planejada = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='Quantidade planejada')
+    quantidade_produzida = models.DecimalField(max_digits=12, decimal_places=3, default=0, verbose_name='Quantidade produzida')
+    status               = models.CharField(max_length=20, choices=STATUS_CHOICES, default='rascunho')
+    data_prevista        = models.DateField(verbose_name='Data prevista de conclusão')
+    data_inicio          = models.DateTimeField(null=True, blank=True, verbose_name='Início efetivo')
+    data_conclusao       = models.DateTimeField(null=True, blank=True, verbose_name='Conclusão efetiva')
+    responsavel          = models.ForeignKey(
+        'Usuario', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='ordens_producao_responsavel'
+    )
+    centro_custo         = models.ForeignKey(
+        'CentroCusto', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='ordens_producao'
+    )
+    observacoes          = models.TextField(blank=True)
+    criado_em            = models.DateTimeField(auto_now_add=True)
+    atualizado_em        = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Ordem de Produção'
+        verbose_name_plural = 'Ordens de Produção'
+        ordering = ['-criado_em']
+        unique_together = [('empresa', 'numero')]
+
+    def __str__(self):
+        return f"OP {self.numero} — {self.produto_final.nome}"
+
+    @property
+    def percentual_conclusao(self):
+        if self.quantidade_planejada > 0:
+            return round(float(self.quantidade_produzida / self.quantidade_planejada * 100), 1)
+        return 0.0
+
+
+class ItemOrdemProducao(models.Model):
+    """Insumos e matérias-primas necessários para a OP (ficha técnica de produção)."""
+    ordem                = models.ForeignKey(OrdemProducao, on_delete=models.CASCADE, related_name='insumos')
+    produto              = models.ForeignKey(Produto, on_delete=models.PROTECT, related_name='usado_em_ordens')
+    lote                 = models.ForeignKey(
+        LoteEstoque, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='consumido_em_ordens', verbose_name='Lote a consumir'
+    )
+    quantidade_planejada = models.DecimalField(max_digits=12, decimal_places=3)
+    quantidade_consumida = models.DecimalField(max_digits=12, decimal_places=3, default=0)
+
+    class Meta:
+        verbose_name = 'Item da Ordem de Produção'
+        verbose_name_plural = 'Itens da Ordem de Produção'
+
+    def __str__(self):
+        return f"{self.produto.nome} × {self.quantidade_planejada} (OP {self.ordem.numero})"
+
+
+class BeneficiamentoLote(models.Model):
+    """
+    Processo de beneficiamento: transforma lotes de produto bruto em produto
+    beneficiado/processado (ex: soja bruta → soja beneficiada, farelo, óleo).
+    Exclusivo para indústrias.
+    """
+    STATUS_CHOICES = [
+        ('pendente',    'Pendente'),
+        ('em_andamento','Em Andamento'),
+        ('concluido',   'Concluído'),
+        ('cancelado',   'Cancelado'),
+    ]
+
+    empresa             = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='beneficiamentos')
+    produto_entrada     = models.ForeignKey(
+        Produto, on_delete=models.PROTECT, related_name='beneficiamentos_entrada',
+        verbose_name='Produto bruto (entrada)'
+    )
+    lote_entrada        = models.ForeignKey(
+        LoteEstoque, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='beneficiamentos_como_entrada', verbose_name='Lote de entrada'
+    )
+    quantidade_entrada  = models.DecimalField(max_digits=12, decimal_places=3, verbose_name='Quantidade de entrada')
+    produto_saida       = models.ForeignKey(
+        Produto, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='beneficiamentos_saida', verbose_name='Produto beneficiado (saída)'
+    )
+    quantidade_saida    = models.DecimalField(max_digits=12, decimal_places=3, default=0, verbose_name='Quantidade de saída')
+    rendimento_percentual = models.DecimalField(max_digits=5, decimal_places=2, default=0, verbose_name='Rendimento (%)')
+    status              = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pendente')
+    data_inicio         = models.DateField(verbose_name='Data de início')
+    data_conclusao      = models.DateField(null=True, blank=True, verbose_name='Data de conclusão')
+    operador            = models.ForeignKey(
+        'Usuario', on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='beneficiamentos_operados'
+    )
+    lote_saida_gerado   = models.ForeignKey(
+        LoteEstoque, on_delete=models.SET_NULL, null=True, blank=True,
+        related_name='gerado_por_beneficiamento', verbose_name='Lote gerado'
+    )
+    observacoes         = models.TextField(blank=True)
+    criado_em           = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Beneficiamento de Lote'
+        verbose_name_plural = 'Beneficiamentos de Lotes'
+        ordering = ['-criado_em']
+
+    def __str__(self):
+        return f"Benef. {self.produto_entrada.nome} → {self.produto_saida.nome if self.produto_saida else '?'} ({self.data_inicio})"
+
+    def save(self, *args, **kwargs):
+        if self.quantidade_entrada > 0 and self.quantidade_saida > 0:
+            self.rendimento_percentual = (self.quantidade_saida / self.quantidade_entrada) * 100
+        super().save(*args, **kwargs)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PLANO DE CONTAS — Mapeamento e Lançamentos Contábeis Automáticos
+# ══════════════════════════════════════════════════════════════════════════════
+
+class MapaContabil(models.Model):
+    """
+    Vincula cada tipo de operação do ERP a um par de contas contábeis
+    (débito/crédito). Configurado na implantação junto ao contador.
+    Quando preenchido, operações geram LancamentoContabil automaticamente.
+    """
+    OPERACAO_CHOICES = [
+        ('conta_pagar_paga',      'Pagamento de Conta a Pagar'),
+        ('conta_receber_recebida','Recebimento de Conta a Receber'),
+        ('venda_pdv',             'Venda PDV'),
+        ('compra_estoque',        'Entrada de Estoque por Compra'),
+        ('sangria_caixa',         'Sangria de Caixa'),
+        ('suprimento_caixa',      'Suprimento de Caixa'),
+    ]
+
+    empresa        = models.ForeignKey(
+        Empresa, on_delete=models.CASCADE, null=True, blank=True,
+        related_name='mapa_contabil',
+        help_text='Null = mapeamento padrão do sistema.'
+    )
+    tipo_operacao  = models.CharField(max_length=30, choices=OPERACAO_CHOICES)
+    conta_debito   = models.ForeignKey(
+        ContaContabil, on_delete=models.PROTECT,
+        related_name='mapa_debito', verbose_name='Conta de Débito'
+    )
+    conta_credito  = models.ForeignKey(
+        ContaContabil, on_delete=models.PROTECT,
+        related_name='mapa_credito', verbose_name='Conta de Crédito'
+    )
+    ativo          = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Mapa Contábil'
+        verbose_name_plural = 'Mapa Contábil'
+        unique_together = [('empresa', 'tipo_operacao')]
+
+    def __str__(self):
+        return f"{self.get_tipo_operacao_display()} → D:{self.conta_debito.codigo} / C:{self.conta_credito.codigo}"
+
+
+class LancamentoContabil(models.Model):
+    """
+    Partida dobrada gerada automaticamente pelas operações do ERP
+    após o Mapa Contábil estar configurado.
+    Imutável — append only, nunca editar ou deletar.
+    """
+    ORIGEM_CHOICES = [
+        ('conta_pagar',    'Conta a Pagar'),
+        ('conta_receber',  'Conta a Receber'),
+        ('venda_pdv',      'Venda PDV'),
+        ('manual',         'Lançamento Manual'),
+    ]
+
+    empresa       = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='lancamentos_contabeis')
+    data          = models.DateField()
+    conta_debito  = models.ForeignKey(
+        ContaContabil, on_delete=models.PROTECT, related_name='lancamentos_debito'
+    )
+    conta_credito = models.ForeignKey(
+        ContaContabil, on_delete=models.PROTECT, related_name='lancamentos_credito'
+    )
+    valor         = models.DecimalField(max_digits=15, decimal_places=2)
+    historico     = models.CharField(max_length=255, verbose_name='Histórico')
+    origem_tipo   = models.CharField(max_length=20, choices=ORIGEM_CHOICES, blank=True)
+    origem_id     = models.PositiveIntegerField(null=True, blank=True)
+    criado_em     = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = 'Lançamento Contábil'
+        verbose_name_plural = 'Lançamentos Contábeis'
+        ordering = ['-data', '-criado_em']
+
+    def __str__(self):
+        return f"{self.data} | D:{self.conta_debito.codigo} C:{self.conta_credito.codigo} | R${self.valor}"
+
+
+def _gerar_lancamento_contabil(empresa, tipo_operacao, valor, historico, origem_tipo, origem_id, data):
+    """
+    Gera um LancamentoContabil se existir MapaContabil configurado para a
+    operação. Idempotente: não duplica se já existir lançamento para o
+    mesmo (origem_tipo, origem_id).
+    """
+    if LancamentoContabil.objects.filter(origem_tipo=origem_tipo, origem_id=origem_id).exists():
+        return
+    mapa = MapaContabil.objects.filter(
+        empresa=empresa, tipo_operacao=tipo_operacao, ativo=True
+    ).first() or MapaContabil.objects.filter(
+        empresa=None, tipo_operacao=tipo_operacao, ativo=True
+    ).first()
+    if not mapa:
+        return
+    LancamentoContabil.objects.create(
+        empresa=empresa,
+        data=data,
+        conta_debito=mapa.conta_debito,
+        conta_credito=mapa.conta_credito,
+        valor=valor,
+        historico=historico,
+        origem_tipo=origem_tipo,
+        origem_id=origem_id,
+    )
