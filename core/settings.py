@@ -2,7 +2,7 @@ from pathlib import Path
 from decouple import config, Csv
 from datetime import timedelta
 
-BASE_DIR = Path(_file_).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ==========================================
 # SEGURANÇA
