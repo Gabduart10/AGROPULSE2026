@@ -64,22 +64,7 @@ const MOCK_CONSOLIDADO: ConsolidadoResp = {
   ],
 }
 
-const MOCK_DETALHE: FilialDetalhe = {
-  ...MOCK_CONSOLIDADO.por_unidade[1],
-  ultimos_pedidos: [
-    { id: 1042, cliente: 'Fazenda São João',    valor_total: 18500, data_pedido: '24/04/2026' },
-    { id: 1041, cliente: 'Agropecuária Norte',  valor_total:  7200, data_pedido: '23/04/2026' },
-    { id: 1039, cliente: 'Produtor Silva',       valor_total: 12300, data_pedido: '22/04/2026' },
-  ],
-  inadimplentes: [
-    { descricao: 'NF 4521', cliente: 'Fazenda Boa Vista', valor: 5400, vencimento: '10/04/2026' },
-    { descricao: 'NF 4498', cliente: 'Agro Centro',       valor: 4100, vencimento: '05/04/2026' },
-  ],
-  contas_vencer: [
-    { descricao: 'Fatura Fornecedor A', fornecedor: 'Insumos Brasil', valor: 18000, vencimento: '27/04/2026' },
-    { descricao: 'Aluguel Depósito',    fornecedor: '—',              valor:  3200, vencimento: '30/04/2026' },
-  ],
-}
+const MOCK_DETALHE: FilialDetalhe | null = null
 
 // ─── sub-componentes ─────────────────────────────────────────────────────────
 
@@ -118,7 +103,7 @@ function PainelFilial({ filialId, onVoltar }: { filialId: number; onVoltar: () =
   useEffect(() => {
     api.get(`/api/matriz/filial/${filialId}/detalhe/`)
       .then(r => setDados(r.data))
-      .catch(() => setDados(MOCK_DETALHE))
+      .catch(() => setDados(null))
   }, [filialId])
 
   if (!dados) return <div className="text-center py-20 text-text-muted text-sm">Carregando...</div>
@@ -241,7 +226,7 @@ export default function MatrizConsolidado() {
   useEffect(() => {
     api.get('/api/matriz/consolidado/')
       .then(r => setResp(r.data))
-      .catch(() => setResp(MOCK_CONSOLIDADO))
+      .catch(() => setResp(null))
       .finally(() => setLoading(false))
   }, [])
 

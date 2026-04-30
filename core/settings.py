@@ -2,14 +2,14 @@ from pathlib import Path
 from decouple import config, Csv
 from datetime import timedelta
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(_file_).resolve().parent.parent
 
 # ==========================================
 # SEGURANÇA
 # ==========================================
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-troque-em-producao')
 DEBUG = config('DEBUG', default=True, cast=bool)
-ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=Csv())
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1,*', cast=Csv())
 
 # ==========================================
 # APLICAÇÕES
@@ -39,10 +39,6 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
-
-# AutomaticLoginMiddleware REMOVIDO — não usar em produção.
-# Se precisar reativar em dev, adicione manualmente:
-#   MIDDLEWARE.append('gestao.middleware.AutomaticLoginMiddleware')
 
 ROOT_URLCONF = 'core.urls'
 AUTH_USER_MODEL = 'gestao.Usuario'
@@ -109,10 +105,10 @@ SIMPLE_JWT = {
 # ==========================================
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:5173,http://localhost:3000',
+    default='http://localhost:5173,http://localhost:3000,https://agropulse-2026-6ozw.vercel.app',
     cast=Csv()
 )
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False 
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_HEADERS = [
     'accept', 'accept-encoding', 'authorization',
@@ -124,12 +120,11 @@ CORS_ALLOW_HEADERS = [
 # ==========================================
 # CSRF
 # ==========================================
-CSRF_TRUSTED_ORIGINS = [
-    'https://*.github.dev',
-    'https://*.app.github.dev',
-    'https://localhost:8000',
-    'http://127.0.0.1:8000',
-]
+CSRF_TRUSTED_ORIGINS = config(
+    'CSRF_TRUSTED_ORIGINS',
+    default='https://*.github.dev,https://*.app.github.dev,https://localhost:8000,http://127.0.0.1:8000,https://agropulse-2026-6ozw.vercel.app',
+    cast=Csv()
+)
 
 SESSION_COOKIE_SAMESITE = 'None'
 SESSION_COOKIE_SECURE = not DEBUG

@@ -165,12 +165,9 @@ export default function Dashboard() {
         )
       })
       .catch(() => {
-        setKpi({ faturamento_mes: 487320, meta_percentual: 73, inadimplencia: 12450, pedidos_aguardando: 5 })
-        setAprovacoes([
-          { id: 1, cliente: 'Fazenda São João',   valor: 'R$ 18.500', vendedor: 'Carlos', tempo: '2h' },
-          { id: 2, cliente: 'Agropecuária Norte', valor: 'R$ 7.200',  vendedor: 'Ana',    tempo: '5h' },
-        ])
-        setAlertas(normalizarAlertas(MOCK_ALERTAS))
+        setKpi(null)
+        setAprovacoes([])
+        setAlertas([])
       })
   }, [])
 

@@ -293,10 +293,10 @@ function TabPainel() {
   const load = async () => {
     setLoading(true)
     const [p, a, d, h] = await Promise.all([
-      api.get('/api/credito/painel/').then(r => r.data).catch(() => MOCK_PAINEL),
-      api.get('/api/credito/aging/').then(r => r.data).catch(() => MOCK_AGING),
-      api.get('/api/credito/pdd/').then(r => r.data).catch(() => MOCK_PDD),
-      api.get('/api/credito/historico-inadimplencia/').then(r => r.data).catch(() => MOCK_HISTORICO),
+      api.get('/api/credito/painel/').then(r => r.data).catch(() => null),
+      api.get('/api/credito/aging/').then(r => r.data).catch(() => null),
+      api.get('/api/credito/pdd/').then(r => r.data).catch(() => null),
+      api.get('/api/credito/historico-inadimplencia/').then(r => r.data).catch(() => []),
     ])
     setPainel(p)
     setAging(a)
@@ -500,7 +500,7 @@ function TabFichas() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/credito/fichas/').then(r => r.data).catch(() => MOCK_FICHAS)
+    const data = await api.get('/api/credito/fichas/').then(r => r.data).catch(() => [])
     setFichas(Array.isArray(data) ? data : data.results ?? [])
     setLoading(false)
   }
@@ -644,7 +644,7 @@ function TabCobranca() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/cobranca/lista/').then(r => r.data).catch(() => MOCK_COBRANCA)
+    const data = await api.get('/api/cobranca/lista/').then(r => r.data).catch(() => [])
     setLista(Array.isArray(data) ? data : [])
     setLoading(false)
   }
@@ -804,7 +804,7 @@ function TabTitulos() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/cobranca/titulos-disputa/').then(r => r.data).catch(() => MOCK_TITULOS)
+    const data = await api.get('/api/cobranca/titulos-disputa/').then(r => r.data).catch(() => [])
     setTitulos(Array.isArray(data) ? data : [])
     setLoading(false)
   }
@@ -889,7 +889,7 @@ function TabAcordos() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/cobranca/acordos/').then(r => r.data).catch(() => MOCK_ACORDOS)
+    const data = await api.get('/api/cobranca/acordos/').then(r => r.data).catch(() => [])
     setAcordos(Array.isArray(data) ? data : [])
     setLoading(false)
   }
@@ -1078,7 +1078,7 @@ function TabConfig() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/credito/configuracao/').then(r => r.data).catch(() => MOCK_CONFIG)
+    const data = await api.get('/api/credito/configuracao/').then(r => r.data).catch(() => null)
     setConfig(data); setLoading(false)
   }
 

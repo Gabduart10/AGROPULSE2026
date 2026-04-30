@@ -139,85 +139,29 @@ function BarH({ pct, color = 'bg-accent' }: { pct: number; color?: string }) {
 // ─── Mock Data ────────────────────────────────────────────────────────────────
 
 const MESES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun']
-const FAT_SERIE = [820000, 910000, 875000, 1050000, 980000, 1120000]
-const MARGEM_SERIE = [18.2, 19.5, 17.8, 21.3, 20.1, 22.4]
+const FAT_SERIE: number[] = []
+const MARGEM_SERIE: number[] = []
 
-const MOCK_FILIAIS = [
-  { id: 1, nome: 'Matriz — Sorriso/MT',    cnpj: '12.345.678/0001-00', fat: 1120000, meta_fat: 1000000, margem: 22.4, inadimplencia: 3.2, pedidos: 142, ticket_medio: 7887 },
-  { id: 2, nome: 'Filial — Lucas/MT',       cnpj: '12.345.678/0002-00', fat: 680000,  meta_fat: 700000,  margem: 19.1, inadimplencia: 5.8, pedidos: 98,  ticket_medio: 6938 },
-  { id: 3, nome: 'Filial — Rondonópolis/MT',cnpj: '12.345.678/0003-00', fat: 430000,  meta_fat: 500000,  margem: 16.7, inadimplencia: 8.4, pedidos: 61,  ticket_medio: 7049 },
-]
+const MOCK_FILIAIS: any[] = []
 
-const MOCK_LOTES = [
-  { id: 1, produto: 'Fungicida Priori Xtra 1L', lote: 'LT-2026-0312', fornecedor: 'Syngenta', dt_compra: '2026-03-12', qty_comprada: 500, qty_vendida: 380, custo_lote: 142.50, preco_venda_medio: 189.00, margem_pct: 24.6, receita: 71820, custo_total: 54150, lucro: 17670 },
-  { id: 2, produto: 'Fungicida Priori Xtra 1L', lote: 'LT-2026-0401', fornecedor: 'Syngenta', dt_compra: '2026-04-01', qty_comprada: 300, qty_vendida: 120, custo_lote: 151.80, preco_venda_medio: 189.00, margem_pct: 19.7, receita: 22680, custo_total: 18216, lucro: 4464 },
-  { id: 3, produto: 'Herbicida Roundup WG', lote: 'LT-2026-0215', fornecedor: 'Bayer', dt_compra: '2026-02-15', qty_comprada: 1000, qty_vendida: 940, custo_lote: 48.20, preco_venda_medio: 68.50, margem_pct: 29.6, receita: 64390, custo_total: 45308, lucro: 19082 },
-  { id: 4, produto: 'Herbicida Roundup WG', lote: 'LT-2026-0318', fornecedor: 'Bayer', dt_compra: '2026-03-18', qty_comprada: 800, qty_vendida: 200, custo_lote: 52.40, preco_venda_medio: 68.50, margem_pct: 23.5, receita: 13700, custo_total: 10480, lucro: 3220 },
-  { id: 5, produto: 'Semente Soja Intacta 40kg', lote: 'LT-2026-0110', fornecedor: 'Brasmax', dt_compra: '2026-01-10', qty_comprada: 200, qty_vendida: 200, custo_lote: 320.00, preco_venda_medio: 420.00, margem_pct: 23.8, receita: 84000, custo_total: 64000, lucro: 20000 },
-  { id: 6, produto: 'Adubo NPK 04-14-08 sc', lote: 'LT-2026-0305', fornecedor: 'Mosaic', dt_compra: '2026-03-05', qty_comprada: 600, qty_vendida: 550, custo_lote: 88.00, preco_venda_medio: 105.00, margem_pct: 16.2, receita: 57750, custo_total: 48400, lucro: 9350 },
-  { id: 7, produto: 'Adubo NPK 04-14-08 sc', lote: 'LT-2026-0410', fornecedor: 'Mosaic', dt_compra: '2026-04-10', qty_comprada: 400, qty_vendida: 80, custo_lote: 94.50, preco_venda_medio: 105.00, margem_pct: 10.0, receita: 8400, custo_total: 7560, lucro: 840 },
-]
+const MOCK_LOTES: any[] = []
 
-const MOCK_DRE_ITENS = [
-  { grupo: 'RECEITA BRUTA',        unidade1: 1120000, unidade2: 680000, consolidado: 1800000, eh_grupo: true },
-  { grupo: '(-) Devoluções',       unidade1: -18400,  unidade2: -9200,  consolidado: -27600,  eh_grupo: false },
-  { grupo: '(-) Impostos s/ vendas',unidade1:-134400, unidade2: -81600, consolidado:-216000,  eh_grupo: false },
-  { grupo: 'RECEITA LÍQUIDA',      unidade1: 967200,  unidade2: 589200, consolidado:1556400,  eh_grupo: true },
-  { grupo: '(-) CMV',              unidade1: -750180, unidade2:-476952, consolidado:-1227132, eh_grupo: false },
-  { grupo: 'LUCRO BRUTO',          unidade1: 217020,  unidade2: 112248, consolidado: 329268,  eh_grupo: true },
-  { grupo: '(-) Despesas comerciais',unidade1:-52000, unidade2: -34000, consolidado: -86000,  eh_grupo: false },
-  { grupo: '(-) Despesas administrativas',unidade1:-38000,unidade2:-28000,consolidado:-66000, eh_grupo: false },
-  { grupo: '(-) Fretes e logística',unidade1:-15000,  unidade2: -10000, consolidado: -25000,  eh_grupo: false },
-  { grupo: 'EBITDA',               unidade1: 112020,  unidade2:  40248, consolidado: 152268,  eh_grupo: true },
-  { grupo: '(-) Depreciação/Amort.',unidade1: -8400,  unidade2:  -4200, consolidado: -12600,  eh_grupo: false },
-  { grupo: '(-) Result. financeiro',unidade1: -6200,  unidade2:  -3800, consolidado: -10000,  eh_grupo: false },
-  { grupo: 'LUCRO LÍQUIDO',        unidade1:  97420,  unidade2:  32248, consolidado: 129668,  eh_grupo: true },
-]
+const MOCK_DRE_ITENS: any[] = []
 
 interface ProdutoRent { id: number; produto: string; categoria: string; receita: number; custo: number; margem_pct: number; pedidos: number; clientes: number; curva: 'A' | 'B' | 'C' }
-const MOCK_PRODUTOS_RENT: ProdutoRent[] = [
-  { id:1, produto:'Herbicida Roundup WG',    categoria:'Herbicida',   receita:78090,  custo:55788,  margem_pct:28.6, pedidos:94, clientes:42, curva:'A' },
-  { id:2, produto:'Semente Soja Intacta 40kg',categoria:'Semente',    receita:84000,  custo:64000,  margem_pct:23.8, pedidos:38, clientes:21, curva:'A' },
-  { id:3, produto:'Fungicida Priori Xtra 1L', categoria:'Fungicida',  receita:94500,  custo:72366,  margem_pct:23.4, pedidos:112,clientes:55, curva:'A' },
-  { id:4, produto:'Adubo NPK 04-14-08 sc',    categoria:'Fertilizante',receita:66150, custo:55960,  margem_pct:15.4, pedidos:67, clientes:30, curva:'B' },
-  { id:5, produto:'Inseticida Connect 1L',    categoria:'Inseticida',  receita:38400,  custo:27648,  margem_pct:28.0, pedidos:48, clientes:19, curva:'B' },
-  { id:6, produto:'Calcário Dolomítico t',    categoria:'Corretivo',   receita:22000,  custo:17600,  margem_pct:20.0, pedidos:31, clientes:14, curva:'C' },
-]
+const MOCK_PRODUTOS_RENT: ProdutoRent[] = []
 
 interface ClienteRent { id: number; cliente: string; regiao: string; receita: number; margem_pct: number; pedidos: number; ticket_medio: number; inadimplencia: number }
-const MOCK_CLIENTES_RENT: ClienteRent[] = [
-  { id:1, cliente:'Fazenda São Lucas Ltda',   regiao:'Lucas/MT',    receita:285000, margem_pct:24.2, pedidos:18, ticket_medio:15833, inadimplencia:0 },
-  { id:2, cliente:'João Carlos Mendonça',     regiao:'Sorriso/MT',  receita:148000, margem_pct:21.8, pedidos:12, ticket_medio:12333, inadimplencia:0 },
-  { id:3, cliente:'Agropecuária Cerrado',     regiao:'Rondonópolis',receita:97000,  margem_pct:18.5, pedidos:8,  ticket_medio:12125, inadimplencia:2.4 },
-  { id:4, cliente:'Cooperativa Agronorte',    regiao:'Sorriso/MT',  receita:220000, margem_pct:15.2, pedidos:22, ticket_medio:10000, inadimplencia:5.8 },
-  { id:5, cliente:'Pedro Alves Neto',         regiao:'Primavera/MT',receita:65000,  margem_pct:22.1, pedidos:7,  ticket_medio:9286,  inadimplencia:0 },
-]
+const MOCK_CLIENTES_RENT: ClienteRent[] = []
 
 interface Inadimplente { id: number; cliente: string; unidade: string; valor_total: number; faixa_1_30: number; faixa_31_60: number; faixa_61_90: number; faixa_91_mais: number; dias_maior: number; status: 'critico' | 'atencao' | 'normal' }
-const MOCK_INAD: Inadimplente[] = [
-  { id:1, cliente:'Cooperativa Agronorte',   unidade:'Sorriso/MT',  valor_total:42800,  faixa_1_30:12000, faixa_31_60:18000, faixa_61_90:8400, faixa_91_mais:4400,  dias_maior:98,  status:'critico' },
-  { id:2, cliente:'Distribuidora Campo',     unidade:'Lucas/MT',    valor_total:18500,  faixa_1_30:6200,  faixa_31_60:8500,  faixa_61_90:3800, faixa_91_mais:0,     dias_maior:58,  status:'atencao' },
-  { id:3, cliente:'João da Silva',           unidade:'Sorriso/MT',  valor_total:4200,   faixa_1_30:4200,  faixa_31_60:0,     faixa_61_90:0,    faixa_91_mais:0,     dias_maior:12,  status:'normal' },
-  { id:4, cliente:'Agropecuária Cerrado',    unidade:'Rondonópolis',valor_total:28400,  faixa_1_30:8000,  faixa_31_60:0,     faixa_61_90:12000,faixa_91_mais:8400,  dias_maior:104, status:'critico' },
-  { id:5, cliente:'Fazenda Santa Cruz',      unidade:'Sorriso/MT',  valor_total:9250,   faixa_1_30:9250,  faixa_31_60:0,     faixa_61_90:0,    faixa_91_mais:0,     dias_maior:14,  status:'normal' },
-]
+const MOCK_INAD: Inadimplente[] = []
 
 interface Vendedor { id: number; nome: string; pedidos: number; meta_pedidos: number; faturamento: number; meta_fat: number; ticket_medio: number; conversao_pct: number; visitas: number; comissao: number }
-const MOCK_VENDEDORES: Vendedor[] = [
-  { id:1, nome:'Ana Lima',     pedidos:58, meta_pedidos:50, faturamento:720000, meta_fat:650000, ticket_medio:12414, conversao_pct:67, visitas:87, comissao:21600 },
-  { id:2, nome:'Carlos Souza', pedidos:41, meta_pedidos:50, faturamento:480000, meta_fat:650000, ticket_medio:11707, conversao_pct:52, visitas:79, comissao:14400 },
-  { id:3, nome:'Marcos Ramos', pedidos:43, meta_pedidos:40, faturamento:400000, meta_fat:400000, ticket_medio:9302,  conversao_pct:61, visitas:70, comissao:12000 },
-]
+const MOCK_VENDEDORES: Vendedor[] = []
 
 interface Alerta { id: number; tipo: 'margem' | 'meta' | 'inadimplencia' | 'estoque'; nivel: 'critico' | 'atencao'; descricao: string; valor?: string; unidade: string; data: string; ativo: boolean }
-const MOCK_ALERTAS: Alerta[] = [
-  { id:1, tipo:'inadimplencia', nivel:'critico', descricao:'Inadimplência acima de 8% na filial Rondonópolis', valor:'8.4%',       unidade:'Rondonópolis/MT', data:'2026-04-20', ativo:true },
-  { id:2, tipo:'margem',        nivel:'critico', descricao:'Lote LT-2026-0410 (Adubo NPK) com margem 10% — abaixo do mínimo 15%', valor:'10.0%', unidade:'Matriz',          data:'2026-04-19', ativo:true },
-  { id:3, tipo:'meta',          nivel:'atencao', descricao:'Filial Lucas/MT 97% da meta de faturamento — risco de não bater', valor:'97%', unidade:'Lucas/MT',          data:'2026-04-18', ativo:true },
-  { id:4, tipo:'meta',          nivel:'atencao', descricao:'Vendedor Carlos Souza com 63% da meta de pedidos',                 valor:'63%', unidade:'Matriz',          data:'2026-04-18', ativo:true },
-  { id:5, tipo:'inadimplencia', nivel:'critico', descricao:'Cooperativa Agronorte com 98 dias em atraso',                     valor:'R$ 42.800', unidade:'Sorriso/MT',  data:'2026-04-17', ativo:false },
-  { id:6, tipo:'margem',        nivel:'atencao', descricao:'Lote LT-2026-0401 (Priori Xtra) com margem 19.7% — mínimo 20%',  valor:'19.7%',     unidade:'Matriz',      data:'2026-04-15', ativo:false },
-]
+const MOCK_ALERTAS: Alerta[] = []
 
 // ─── Tab: Dashboard Gerencial ─────────────────────────────────────────────────
 
@@ -226,8 +170,8 @@ function TabDashboard() {
 
   const totalFat = MOCK_FILIAIS.reduce((a, f) => a + f.fat, 0)
   const totalMeta = MOCK_FILIAIS.reduce((a, f) => a + f.meta_fat, 0)
-  const margemMedia = MOCK_FILIAIS.reduce((a, f) => a + f.margem * f.fat, 0) / totalFat
-  const inadMedia = MOCK_FILIAIS.reduce((a, f) => a + f.inadimplencia * f.fat, 0) / totalFat
+  const margemMedia = totalFat > 0 ? MOCK_FILIAIS.reduce((a, f) => a + f.margem * f.fat, 0) / totalFat : 0
+  const inadMedia = totalFat > 0 ? MOCK_FILIAIS.reduce((a, f) => a + f.inadimplencia * f.fat, 0) / totalFat : 0
 
   return (
     <div className="space-y-6">

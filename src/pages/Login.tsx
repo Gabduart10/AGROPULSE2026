@@ -1,7 +1,7 @@
 import { useState, FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
-import { ShieldCheck } from 'lucide-react'
+import { ShieldCheck, Eye, EyeOff } from 'lucide-react'
 
 export default function Login() {
   const { login } = useAuth()
@@ -12,6 +12,7 @@ export default function Login() {
   const [requires2fa, setRequires2fa] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -51,20 +52,26 @@ export default function Login() {
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div>
-                  <label className="block text-xs font-medium text-text-secondary mb-1.5">E-mail</label>
+                  <label className="block text-xs font-medium text-text-secondary mb-1.5">Usuário ou E-mail</label>
                   <input
-                    type="email" value={email} onChange={e => setEmail(e.target.value)} required
+                    type="text" value={email} onChange={e => setEmail(e.target.value)} required
                     className="w-full bg-card2 border border-border rounded-lg px-3 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent transition-colors"
-                    placeholder="seu@email.com"
+                    placeholder="usuário ou seu@email.com"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-text-secondary mb-1.5">Senha</label>
-                  <input
-                    type="password" value={password} onChange={e => setPassword(e.target.value)} required
-                    className="w-full bg-card2 border border-border rounded-lg px-3 py-2.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent transition-colors"
-                    placeholder="••••••••"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} required
+                      className="w-full bg-card2 border border-border rounded-lg px-3 py-2.5 pr-10 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-accent transition-colors"
+                      placeholder="••••••••"
+                    />
+                    <button type="button" onClick={() => setShowPassword(v => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors">
+                      {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
                 </div>
 
                 {error && (

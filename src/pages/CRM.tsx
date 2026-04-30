@@ -314,10 +314,10 @@ function TabProdutores() {
   const [form, setForm] = useState({ nome: '', cpf_cnpj: '', municipio: '', uf: 'MT', area_total_ha: '', culturas: '', telefone: '', email: '', consultor: '', status: 'ativo' })
 
   useState(() => {
-    api.get('/api/crm/produtores/').then(r => setRows(r.data)).catch(() => setRows(MOCK_PRODUTORES))
+    api.get('/api/crm/produtores/').then(r => setRows(r.data)).catch(() => setRows([]))
   })
 
-  const consultores = [...new Set(MOCK_PRODUTORES.map(p => p.consultor))]
+  const consultores: string[] = []
 
   const visible = rows.filter(r => {
     if (filtroStatus !== 'todos' && r.status !== filtroStatus) return false
@@ -341,10 +341,10 @@ function TabProdutores() {
   return (
     <div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-        <KpiCard label="Total de produtores" val={rows.length || MOCK_PRODUTORES.length} />
-        <KpiCard label="Ativos" val={(rows.length ? rows : MOCK_PRODUTORES).filter(r => r.status === 'ativo').length} ok />
-        <KpiCard label="Prospects" val={(rows.length ? rows : MOCK_PRODUTORES).filter(r => r.status === 'prospecto').length} neutral />
-        <KpiCard label="Área total (ha)" val={((rows.length ? rows : MOCK_PRODUTORES).reduce((a, r) => a + r.area_total_ha, 0)).toLocaleString('pt-BR')} sub="em carteira" />
+        <KpiCard label="Total de produtores" val={rows.length} />
+        <KpiCard label="Ativos" val={rows.filter(r => r.status === 'ativo').length} ok />
+        <KpiCard label="Prospects" val={rows.filter(r => r.status === 'prospecto').length} neutral />
+        <KpiCard label="Área total (ha)" val={rows.reduce((a, r) => a + (r.area_total_ha ?? 0), 0).toLocaleString('pt-BR')} sub="em carteira" />
       </div>
 
       <Bar value={q} onChange={setQ} placeholder="Buscar produtor, município...">
@@ -462,10 +462,10 @@ function TabVisitas() {
   const [form, setForm] = useState({ produtor: '', consultor: '', data: '', tipo: 'tecnica', status: 'agendada', observacoes: '' })
 
   useState(() => {
-    api.get('/api/crm/visitas/').then(r => setRows(r.data)).catch(() => setRows(MOCK_VISITAS))
+    api.get('/api/crm/visitas/').then(r => setRows(r.data)).catch(() => setRows([]))
   })
 
-  const visible = (rows.length ? rows : MOCK_VISITAS).filter(r => {
+  const visible = rows.filter(r => {
     if (filtroStatus !== 'todos' && r.status !== filtroStatus) return false
     const s = q.toLowerCase()
     return !s || r.produtor.toLowerCase().includes(s) || r.consultor.toLowerCase().includes(s) || r.municipio.toLowerCase().includes(s)
@@ -486,10 +486,10 @@ function TabVisitas() {
   return (
     <div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-        <KpiCard label="Total de visitas" val={MOCK_VISITAS.length} />
-        <KpiCard label="Agendadas" val={MOCK_VISITAS.filter(v => v.status === 'agendada').length} neutral />
-        <KpiCard label="Realizadas" val={MOCK_VISITAS.filter(v => v.status === 'realizada').length} ok />
-        <KpiCard label="Com recomendação" val={MOCK_VISITAS.filter(v => v.recomendacao).length} sub="visitas técnicas" />
+        <KpiCard label="Total de visitas" val={rows.length} />
+        <KpiCard label="Agendadas" val={rows.filter((v: any) => v.status === 'agendada').length} neutral />
+        <KpiCard label="Realizadas" val={rows.filter((v: any) => v.status === 'realizada').length} ok />
+        <KpiCard label="Com recomendação" val={rows.filter((v: any) => v.recomendacao).length} sub="visitas técnicas" />
       </div>
 
       <Bar value={q} onChange={setQ} placeholder="Buscar produtor, município...">
@@ -1023,7 +1023,7 @@ function TabDashboard() {
       {/* KPIs gerais */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <KpiCard label="Produtores na carteira" val={MOCK_PRODUTORES.filter(p => p.status === 'ativo').length} ok />
-        <KpiCard label="Visitas este mês" val={MOCK_VISITAS.filter(v => v.status === 'realizada').length} />
+        <KpiCard label="Visitas este mês" val={rows.filter((v: any) => v.status === 'realizada').length} />
         <KpiCard label="Pipeline total" val={fmtBRL(MOCK_OPORTUNIDADES.filter(o => !['fechado_perdido'].includes(o.etapa)).reduce((a, o) => a + o.valor_estimado, 0))} />
         <KpiCard label="Conversão de amostras" val={`${Math.round(MOCK_AMOSTRAS.filter(a => a.status === 'convertida').length / Math.max(MOCK_AMOSTRAS.filter(a => ['convertida', 'nao_convertida'].includes(a.status)).length, 1) * 100)}%`} ok />
       </div>

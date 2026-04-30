@@ -280,7 +280,7 @@ const MOCK_CUSTEIO: ItemCusteio[] = [
 // ─── Tab Safras ────────────────────────────────────────────────────────────────
 
 function TabSafras() {
-  const [rows, setRows] = useState<Safra[]>(MOCK_SAFRAS)
+  const [rows, setRows] = useState<Safra[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [modal, setModal] = useState(false)
@@ -303,7 +303,7 @@ function TabSafras() {
   async function save() {
     setSaving(true)
     try { await api.post('/api/safras/', form) } catch { /* mock */ }
-    const newRow: Safra = { id: Date.now(), nome: form.nome, cultura: form.cultura, variedade: form.variedade, fazenda_id: +form.fazenda_id, fazenda_nome: MOCK_FAZENDAS.find(f => f.id === +form.fazenda_id)?.nome ?? '', area_ha: +form.area_ha, data_plantio_prevista: form.data_plantio_prevista, data_colheita_prevista: form.data_colheita_prevista, produtividade_prevista: +form.produtividade_prevista, status: form.status as Safra['status'] }
+    const newRow: Safra = { id: Date.now(), nome: form.nome, cultura: form.cultura, variedade: form.variedade, fazenda_id: +form.fazenda_id, fazenda_nome: '', area_ha: +form.area_ha, data_plantio_prevista: form.data_plantio_prevista, data_colheita_prevista: form.data_colheita_prevista, produtividade_prevista: +form.produtividade_prevista, status: form.status as Safra['status'] }
     setRows(r => [...r, newRow])
     setModal(false)
     setSaving(false)
@@ -369,7 +369,7 @@ function TabSafras() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Fazenda *">
                 <Sel value={form.fazenda_id} onChange={v => setForm(f => ({ ...f, fazenda_id: v }))}>
-                  {MOCK_FAZENDAS.map(faz => <option key={faz.id} value={faz.id}>{faz.nome}</option>)}
+                  {[]}
                 </Sel>
               </Field>
               <Field label="Área Total (ha) *"><input type="number" className={inp} value={form.area_ha} onChange={e => setForm(f => ({ ...f, area_ha: e.target.value }))} placeholder="470" /></Field>
@@ -398,7 +398,7 @@ function TabSafras() {
 // ─── Tab Talhões ──────────────────────────────────────────────────────────────
 
 function TabTalhoes() {
-  const [rows, setRows] = useState<Talhao[]>(MOCK_TALHOES)
+  const [rows, setRows] = useState<Talhao[]>([])
   const [search, setSearch] = useState('')
   const [filterFazenda, setFilterFazenda] = useState('')
   const [modal, setModal] = useState(false)
@@ -414,7 +414,7 @@ function TabTalhoes() {
   async function save() {
     setSaving(true)
     try { await api.post('/api/talhoes/', form) } catch { /* mock */ }
-    const newRow: Talhao = { id: Date.now(), nome: form.nome, gleba: form.gleba, fazenda_id: +form.fazenda_id, fazenda_nome: MOCK_FAZENDAS.find(f => f.id === +form.fazenda_id)?.nome ?? '', area_ha: +form.area_ha, cultura_atual: form.cultura_atual, coordenadas: form.coordenadas, georeferenciado: !!form.coordenadas, ativo: true }
+    const newRow: Talhao = { id: Date.now(), nome: form.nome, gleba: form.gleba, fazenda_id: +form.fazenda_id, fazenda_nome: '', area_ha: +form.area_ha, cultura_atual: form.cultura_atual, coordenadas: form.coordenadas, georeferenciado: !!form.coordenadas, ativo: true }
     setRows(r => [...r, newRow])
     setModal(false)
     setSaving(false)
@@ -432,7 +432,7 @@ function TabTalhoes() {
       <Bar value={search} onChange={setSearch} placeholder="Buscar talhão ou fazenda...">
         <Sel value={filterFazenda} onChange={setFilterFazenda}>
           <option value="">Todas as fazendas</option>
-          {MOCK_FAZENDAS.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+          {[]}
         </Sel>
         <BtnNew onClick={() => { setForm({ nome:'', gleba:'', fazenda_id:'1', area_ha:'', cultura_atual:'', coordenadas:'' }); setModal(true) }} label="Novo Talhão" />
       </Bar>
@@ -460,7 +460,7 @@ function TabTalhoes() {
           <div className="space-y-4">
             <Field label="Fazenda *">
               <Sel value={form.fazenda_id} onChange={v => setForm(f => ({ ...f, fazenda_id: v }))}>
-                {MOCK_FAZENDAS.map(faz => <option key={faz.id} value={faz.id}>{faz.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <div className="grid grid-cols-2 gap-4">
@@ -486,7 +486,7 @@ function TabTalhoes() {
 // ─── Tab Aplicações ───────────────────────────────────────────────────────────
 
 function TabAplicacoes() {
-  const [rows, setRows] = useState<Aplicacao[]>(MOCK_APLICACOES)
+  const [rows, setRows] = useState<Aplicacao[]>([])
   const [search, setSearch] = useState('')
   const [filterTipo, setFilterTipo] = useState('')
   const [filterSafra, setFilterSafra] = useState('')
@@ -498,7 +498,7 @@ function TabAplicacoes() {
   const toggleAll = (ids: number[]) => setSel(s => s.size === ids.length ? new Set() : new Set(ids))
   const [form, setForm] = useState({ data: '', fazenda_id: '1', talhao_id: '', safra_id: '', tipo: 'defensivo', produto: '', numero_lote: '', dose_ha: '', unidade: 'L/ha', area_ha: '', equipamento: '', operador: '', temperatura: '', umidade: '', vento_kmh: '' })
 
-  const talhoesFazenda = MOCK_TALHOES.filter(t => t.fazenda_id === +form.fazenda_id)
+  const talhoesFazenda: any[] = []
 
   const filtered = rows.filter(r =>
     (r.produto.toLowerCase().includes(search.toLowerCase()) || r.talhao_nome.toLowerCase().includes(search.toLowerCase()) || r.numero_lote.toLowerCase().includes(search.toLowerCase())) &&
@@ -510,9 +510,9 @@ function TabAplicacoes() {
 
   async function save() {
     setSaving(true)
-    const fazenda = MOCK_FAZENDAS.find(f => f.id === +form.fazenda_id)
-    const talhao = MOCK_TALHOES.find(t => t.id === +form.talhao_id)
-    const safra = MOCK_SAFRAS.find(s => s.id === +form.safra_id)
+    const fazenda = undefined
+    const talhao = undefined
+    const safra = undefined
     try { await api.post('/api/aplicacoes/', form) } catch { /* mock */ }
     const newRow: Aplicacao = { id: Date.now(), data: form.data, fazenda_nome: fazenda?.nome ?? '', talhao_nome: talhao?.nome ?? '', safra_nome: safra?.nome ?? '', tipo: form.tipo as Aplicacao['tipo'], produto: form.produto, numero_lote: form.numero_lote, dose_ha: +form.dose_ha, unidade: form.unidade, area_ha: +form.area_ha, equipamento: form.equipamento, operador: form.operador, temperatura: form.temperatura ? +form.temperatura : undefined, umidade: form.umidade ? +form.umidade : undefined, vento_kmh: form.vento_kmh ? +form.vento_kmh : undefined }
     setRows(r => [newRow, ...r])
@@ -539,7 +539,7 @@ function TabAplicacoes() {
         </Sel>
         <Sel value={filterSafra} onChange={setFilterSafra}>
           <option value="">Todas as safras</option>
-          {MOCK_SAFRAS.map(s => <option key={s.id} value={s.nome}>{s.nome}</option>)}
+          {[]}
         </Sel>
         <ExportButtons endpoint="/api/aplicacoes/" filename="aplicacoes" selectedIds={sel.size > 0 ? [...sel] : undefined} />
         <BtnNew onClick={() => { setForm({ data:'', fazenda_id:'1', talhao_id:'', safra_id:'', tipo:'defensivo', produto:'', numero_lote:'', dose_ha:'', unidade:'L/ha', area_ha:'', equipamento:'', operador:'', temperatura:'', umidade:'', vento_kmh:'' }); setModal(true) }} label="Registrar Aplicação" />
@@ -613,7 +613,7 @@ function TabAplicacoes() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Fazenda *">
                 <Sel value={form.fazenda_id} onChange={v => setForm(f => ({ ...f, fazenda_id: v, talhao_id: '' }))}>
-                  {MOCK_FAZENDAS.map(faz => <option key={faz.id} value={faz.id}>{faz.nome}</option>)}
+                  {[]}
                 </Sel>
               </Field>
               <Field label="Talhão *">
@@ -627,7 +627,7 @@ function TabAplicacoes() {
               <Field label="Safra *">
                 <Sel value={form.safra_id} onChange={v => setForm(f => ({ ...f, safra_id: v }))}>
                   <option value="">Selecionar...</option>
-                  {MOCK_SAFRAS.filter(s => s.fazenda_id === +form.fazenda_id).map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
+                  {[]}
                 </Sel>
               </Field>
               <Field label="Área Aplicada (ha) *"><input type="number" className={inp} value={form.area_ha} onChange={e => setForm(f => ({ ...f, area_ha: e.target.value }))} placeholder="320" /></Field>
@@ -665,7 +665,7 @@ function TabAplicacoes() {
 // ─── Tab Diário de Campo ──────────────────────────────────────────────────────
 
 function TabDiario() {
-  const [rows, setRows] = useState<DiarioCampo[]>(MOCK_DIARIO)
+  const [rows, setRows] = useState<DiarioCampo[]>([])
   const [search, setSearch] = useState('')
   const [filterTipo, setFilterTipo] = useState('')
   const [filterFazenda, setFilterFazenda] = useState('')
@@ -677,7 +677,7 @@ function TabDiario() {
   const toggleAll = (ids: number[]) => setSel(s => s.size === ids.length ? new Set() : new Set(ids))
   const [form, setForm] = useState({ data:'', hora:'', fazenda_id:'1', talhao_id:'', safra_id:'', tipo_atividade:'visita_tecnica', operador:'', descricao:'' })
 
-  const talhoesFazenda = MOCK_TALHOES.filter(t => t.fazenda_id === +form.fazenda_id)
+  const talhoesFazenda: any[] = []
   const pendentes = rows.filter(r => !r.sincronizado).length
 
   const filtered = rows.filter(r =>
@@ -688,9 +688,9 @@ function TabDiario() {
 
   async function save() {
     setSaving(true)
-    const fazenda = MOCK_FAZENDAS.find(f => f.id === +form.fazenda_id)
-    const talhao = MOCK_TALHOES.find(t => t.id === +form.talhao_id)
-    const safra = MOCK_SAFRAS.find(s => s.id === +form.safra_id)
+    const fazenda = undefined
+    const talhao = undefined
+    const safra = undefined
     try { await api.post('/api/diario-campo/', form) } catch { /* mock */ }
     const newRow: DiarioCampo = { id: Date.now(), data: form.data, hora: form.hora, fazenda_nome: fazenda?.nome ?? '', talhao_nome: talhao?.nome, safra_nome: safra?.nome, tipo_atividade: form.tipo_atividade, operador: form.operador, descricao: form.descricao, fotos: 0, sincronizado: navigator.onLine }
     setRows(r => [newRow, ...r])
@@ -734,7 +734,7 @@ function TabDiario() {
         </Sel>
         <Sel value={filterFazenda} onChange={setFilterFazenda}>
           <option value="">Todas as fazendas</option>
-          {MOCK_FAZENDAS.map(f => <option key={f.id} value={f.nome}>{f.nome}</option>)}
+          {[]}
         </Sel>
         <ExportButtons endpoint="/api/diario-campo/" filename="diario_campo" selectedIds={sel.size > 0 ? [...sel] : undefined} />
         <BtnNew onClick={() => { setForm({ data:'', hora:'', fazenda_id:'1', talhao_id:'', safra_id:'', tipo_atividade:'visita_tecnica', operador:'', descricao:'' }); setModal(true) }} label="Novo Registro" />
@@ -799,7 +799,7 @@ function TabDiario() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Fazenda *">
                 <Sel value={form.fazenda_id} onChange={v => setForm(f => ({ ...f, fazenda_id: v, talhao_id: '' }))}>
-                  {MOCK_FAZENDAS.map(faz => <option key={faz.id} value={faz.id}>{faz.nome}</option>)}
+                  {[]}
                 </Sel>
               </Field>
               <Field label="Talhão">
@@ -818,7 +818,7 @@ function TabDiario() {
               <Field label="Safra (opcional)">
                 <Sel value={form.safra_id} onChange={v => setForm(f => ({ ...f, safra_id: v }))}>
                   <option value="">— Nenhuma —</option>
-                  {MOCK_SAFRAS.filter(s => s.fazenda_id === +form.fazenda_id).map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
+                  {[]}
                 </Sel>
               </Field>
             </div>
@@ -838,7 +838,7 @@ function TabDiario() {
 // ─── Tab Ordens de Serviço (Indústria) ────────────────────────────────────────
 
 function TabOrdens() {
-  const [rows, setRows] = useState<OrdemServico[]>(MOCK_ORDENS)
+  const [rows, setRows] = useState<OrdemServico[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [modal, setModal] = useState(false)
@@ -848,7 +848,7 @@ function TabOrdens() {
   const toggleAll = (ids: number[]) => setSel(s => s.size === ids.length ? new Set() : new Set(ids))
   const [form, setForm] = useState({ tipo:'plantio', safra_id:'1', talhao_id:'', fazenda_id:'1', area_ha:'', data_prevista:'', responsavel:'', observacao:'' })
 
-  const talhoesFazenda = MOCK_TALHOES.filter(t => t.fazenda_id === +form.fazenda_id)
+  const talhoesFazenda: any[] = []
 
   const filtered = rows.filter(r =>
     (r.numero.toLowerCase().includes(search.toLowerCase()) || r.responsavel.toLowerCase().includes(search.toLowerCase()) || r.talhao_nome.toLowerCase().includes(search.toLowerCase())) &&
@@ -861,9 +861,9 @@ function TabOrdens() {
 
   async function save() {
     setSaving(true)
-    const fazenda = MOCK_FAZENDAS.find(f => f.id === +form.fazenda_id)
-    const talhao = MOCK_TALHOES.find(t => t.id === +form.talhao_id)
-    const safra = MOCK_SAFRAS.find(s => s.id === +form.safra_id)
+    const fazenda = undefined
+    const talhao = undefined
+    const safra = undefined
     try { await api.post('/api/ordens-servico-agricola/', form) } catch { /* mock */ }
     const numero = `OS-${new Date().getFullYear()}-${String(rows.length + 1).padStart(3, '0')}`
     const newRow: OrdemServico = { id: Date.now(), numero, tipo: form.tipo, safra_nome: safra?.nome ?? '', talhao_nome: talhao?.nome ?? '', fazenda_nome: fazenda?.nome ?? '', area_ha: +form.area_ha, data_prevista: form.data_prevista, responsavel: form.responsavel, status: 'pendente' }
@@ -926,7 +926,7 @@ function TabOrdens() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Fazenda *">
                 <Sel value={form.fazenda_id} onChange={v => setForm(f => ({ ...f, fazenda_id: v, talhao_id: '' }))}>
-                  {MOCK_FAZENDAS.map(faz => <option key={faz.id} value={faz.id}>{faz.nome}</option>)}
+                  {[]}
                 </Sel>
               </Field>
               <Field label="Talhão *">
@@ -939,7 +939,7 @@ function TabOrdens() {
             <div className="grid grid-cols-2 gap-4">
               <Field label="Safra *">
                 <Sel value={form.safra_id} onChange={v => setForm(f => ({ ...f, safra_id: v }))}>
-                  {MOCK_SAFRAS.filter(s => s.fazenda_id === +form.fazenda_id).map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
+                  {[]}
                 </Sel>
               </Field>
               <Field label="Área (ha)"><input type="number" className={inp} value={form.area_ha} onChange={e => setForm(f => ({ ...f, area_ha: e.target.value }))} placeholder="320" /></Field>
@@ -963,10 +963,10 @@ function TabCusteio() {
   const [safraId, setSafraId] = useState<number>(1)
   const [modal, setModal] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [items, setItems] = useState<ItemCusteio[]>(MOCK_CUSTEIO)
+  const [items, setItems] = useState<ItemCusteio[]>([])
   const [form, setForm] = useState({ categoria:'insumos', descricao:'', valor:'', data:'' })
 
-  const safra = MOCK_SAFRAS.find(s => s.id === safraId)
+  const safra = undefined
   const safraItems = items.filter(i => i.safra_id === safraId)
   const totalCusto = safraItems.reduce((s, i) => s + i.valor, 0)
   const custoPorHa = safra ? totalCusto / safra.area_ha : 0
@@ -997,7 +997,7 @@ function TabCusteio() {
         <span className="text-sm font-medium text-text-secondary whitespace-nowrap">Safra em análise:</span>
         <div className="relative w-72">
           <select className={selCss} value={safraId} onChange={e => setSafraId(+e.target.value)}>
-            {MOCK_SAFRAS.map(s => <option key={s.id} value={s.id}>{s.nome} — {s.fazenda_nome}</option>)}
+            {[]}
           </select>
           <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
         </div>
@@ -1141,8 +1141,8 @@ function GaugeRing({ value, label, color }: { value: number; label: string; colo
 
 function TabOEECampo() {
   const [sel, setSel] = useState<string>('todos')
-  const rows = sel === 'todos' ? MOCK_OEE_CAMPO : MOCK_OEE_CAMPO.filter(r => r.tipo === sel)
-  const tipos = ['todos', ...Array.from(new Set(MOCK_OEE_CAMPO.map(r => r.tipo)))]
+  const rows: any[] = []
+  const tipos = ['todos']
 
   return (
     <div className="space-y-5">
@@ -1250,12 +1250,9 @@ function ChainStep({ label, content, done }: { label: string; content: React.Rea
 
 function TabRastreabilidade() {
   const [busca, setBusca] = useState('')
-  const [detalhe, setDetalhe] = useState<typeof MOCK_RASTREABILIDADE[0] | null>(null)
+  const [detalhe, setDetalhe] = useState<any>(null)
 
-  const rows = MOCK_RASTREABILIDADE.filter(r =>
-    r.lote_insumo.toLowerCase().includes(busca.toLowerCase()) ||
-    r.produto_insumo.toLowerCase().includes(busca.toLowerCase())
-  )
+  const rows: any[] = []
 
   return (
     <div className="space-y-4">

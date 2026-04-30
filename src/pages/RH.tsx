@@ -299,7 +299,7 @@ const MOCK_FGTS: GuiaFGTS[] = [
 // ─── Tab Colaboradores ────────────────────────────────────────────────────────
 
 function TabColaboradores() {
-  const [rows] = useState<ColaboradorRH[]>(MOCK_COLABORADORES)
+  const [rows, setRows] = useState<ColaboradorRH[]>([])
   const [search, setSearch] = useState('')
   const [filterContrato, setFilterContrato] = useState('')
 
@@ -363,7 +363,7 @@ function TabColaboradores() {
 // ─── Tab Ponto Eletrônico ─────────────────────────────────────────────────────
 
 function TabPonto() {
-  const [rows] = useState<RegistroPonto[]>(MOCK_PONTO)
+  const [rows, setRows] = useState<RegistroPonto[]>([])
   const [search, setSearch] = useState('')
   const [filterData, setFilterData] = useState('2026-04-21')
   const [modal, setModal] = useState(false)
@@ -384,7 +384,7 @@ function TabPonto() {
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <KpiCard label="Presentes Hoje" val={MOCK_COLABORADORES.filter(c => c.status_ponto === 'presente').length} sub={`de ${MOCK_COLABORADORES.filter(c => c.ativo).length} ativos`} />
+        <KpiCard label="Presentes Hoje" val={0} sub="de 0 ativos" />
         <KpiCard label="Pendentes Aprovação" val={rows.filter(r => r.status === 'pendente').length} warn={rows.filter(r => r.status === 'pendente').length > 0} />
         <KpiCard label="HE no Período" val={`${rows.reduce((s, r) => s + r.horas_extras, 0)}min`} sub="horas extras" />
         <KpiCard label="Registros App" val={rows.filter(r => r.origem === 'app').length} sub="com geolocalização" />
@@ -430,7 +430,7 @@ function TabPonto() {
             </div>
             <Field label="Colaborador *">
               <Sel value={form.colaborador_id} onChange={v => setForm(f => ({ ...f, colaborador_id: v }))}>
-                {MOCK_COLABORADORES.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <Field label="Data *"><input type="date" className={inp} value={form.data} onChange={e => setForm(f => ({ ...f, data: e.target.value }))} /></Field>
@@ -454,7 +454,7 @@ function TabPonto() {
 // ─── Tab Folha de Pagamento ───────────────────────────────────────────────────
 
 function TabFolha() {
-  const [rows, setRows] = useState<ItemFolha[]>(MOCK_FOLHA)
+  const [rows, setRows] = useState<ItemFolha[]>([])
   const [competencia, setCompetencia] = useState(COMPETENCIA_ATUAL)
   const [tipo, setTipo] = useState('mensal')
   const [confirmModal, setConfirmModal] = useState(false)
@@ -579,7 +579,7 @@ function TabFolha() {
 // ─── Tab Afastamentos ─────────────────────────────────────────────────────────
 
 function TabAfastamentos() {
-  const [rows, setRows] = useState<Afastamento[]>(MOCK_AFASTAMENTOS)
+  const [rows, setRows] = useState<Afastamento[]>([])
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -597,7 +597,7 @@ function TabAfastamentos() {
 
   async function save() {
     setSaving(true)
-    const colab = MOCK_COLABORADORES.find(c => c.id === +form.colaborador_id)
+    const colab = undefined
     try { await api.post('/api/rh/afastamentos/', form) } catch { /* mock */ }
     const n: Afastamento = { id: Date.now(), colaborador_nome: colab?.nome ?? '', tipo: form.tipo, data_inicio: form.data_inicio, data_fim: form.data_fim, dias: calcDias(form.data_inicio, form.data_fim), cid: form.cid || undefined, observacao: form.observacao || undefined, status: 'ativo' }
     setRows(r => [n, ...r])
@@ -641,7 +641,7 @@ function TabAfastamentos() {
           <div className="space-y-4">
             <Field label="Colaborador *">
               <Sel value={form.colaborador_id} onChange={v => setForm(f => ({ ...f, colaborador_id: v }))}>
-                {MOCK_COLABORADORES.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <Field label="Tipo *">
@@ -676,8 +676,8 @@ function TabAfastamentos() {
 // ─── Tab EPI e NR-31 ─────────────────────────────────────────────────────────
 
 function TabEPI() {
-  const [epiRows] = useState<EPI[]>(MOCK_EPI)
-  const [treRows] = useState<Treinamento[]>(MOCK_TREINAMENTOS)
+  const [epiRows, setEpiRows] = useState<EPI[]>([])
+  const [treRows, setTreRows] = useState<Treinamento[]>([])
   const [subTab, setSubTab] = useState<'epi' | 'treinamentos'>('epi')
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(false)
@@ -773,7 +773,7 @@ function TabEPI() {
           <div className="space-y-4">
             <Field label="Colaborador *">
               <Sel value={form.colaborador_id} onChange={v => setForm(f => ({ ...f, colaborador_id: v }))}>
-                {MOCK_COLABORADORES.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <div className="grid grid-cols-2 gap-4">
@@ -795,7 +795,7 @@ function TabEPI() {
           <div className="space-y-4">
             <Field label="Colaborador *">
               <Sel value={formTre.colaborador_id} onChange={v => setFormTre(f => ({ ...f, colaborador_id: v }))}>
-                {MOCK_COLABORADORES.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <Field label="Título do Treinamento *"><input className={inp} value={formTre.titulo} onChange={e => setFormTre(f => ({ ...f, titulo: e.target.value }))} placeholder="Ex: NR-31 — Segurança no Trabalho Rural" /></Field>
@@ -823,8 +823,8 @@ function TabEPI() {
 // ─── Tab eSocial e FGTS ───────────────────────────────────────────────────────
 
 function TabESocial() {
-  const [eventos] = useState<EventoESocial[]>(MOCK_ESOCIAL)
-  const [guias, setGuias] = useState<GuiaFGTS[]>(MOCK_FGTS)
+  const [eventos, setEventos] = useState<EventoESocial[]>([])
+  const [guias, setGuias] = useState<GuiaFGTS[]>([])
   const [subTab, setSubTab] = useState<'esocial' | 'fgts'>('esocial')
   const [sending, setSending] = useState(false)
 
@@ -944,7 +944,7 @@ function TabRelatorios() {
 
   const fmtR = (v: number) => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits:2 })}`
 
-  const porColaborador = MOCK_FOLHA.map(f => ({
+  const porColaborador = ([] as typeof MOCK_FOLHA).map(f => ({
     nome: f.colaborador_nome, cargo: f.cargo,
     salario: f.salario_base, fgts: f.fgts,
     encargos_inss: f.inss, total_empresa: f.total_proventos + f.fgts,
@@ -952,8 +952,8 @@ function TabRelatorios() {
   }))
 
   const porDepto: Record<string, { total: number; fgts: number; count: number }> = {}
-  MOCK_COLABORADORES.forEach(c => {
-    const folha = MOCK_FOLHA.find(f => f.colaborador_id === c.id)
+  ([]).forEach(c => {
+    const folha = undefined
     if (!folha) return
     const d = c.departamento ?? 'Sem depto.'
     if (!porDepto[d]) porDepto[d] = { total: 0, fgts: 0, count: 0 }
@@ -962,9 +962,9 @@ function TabRelatorios() {
     porDepto[d].count++
   })
 
-  const totalCusto = MOCK_FOLHA.reduce((s, f) => s + f.total_proventos + f.fgts, 0)
-  const totalLiquido = MOCK_FOLHA.reduce((s, f) => s + f.liquido, 0)
-  const totalFGTS = MOCK_FOLHA.reduce((s, f) => s + f.fgts, 0)
+  const totalCusto = ([] as typeof MOCK_FOLHA).reduce((s, f) => s + f.total_proventos + f.fgts, 0)
+  const totalLiquido = ([] as typeof MOCK_FOLHA).reduce((s, f) => s + f.liquido, 0)
+  const totalFGTS = ([] as typeof MOCK_FOLHA).reduce((s, f) => s + f.fgts, 0)
 
   return (
     <div>
@@ -983,7 +983,7 @@ function TabRelatorios() {
         <KpiCard label="Custo Total Empresa" val={fmtR(totalCusto)} sub="proventos + FGTS" />
         <KpiCard label="Total Líquido" val={fmtR(totalLiquido)} sub="pago aos colaboradores" />
         <KpiCard label="FGTS Total" val={fmtR(totalFGTS)} />
-        <KpiCard label="Custo Médio/Colaborador" val={fmtR(totalCusto / MOCK_FOLHA.length)} />
+        <KpiCard label="Custo Médio/Colaborador" val={fmtR(totalCusto / 1)} />
       </div>
 
       {agrupamento === 'colaborador' && (

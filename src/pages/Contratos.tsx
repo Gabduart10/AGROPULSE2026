@@ -198,7 +198,7 @@ function TabCPR() {
     setLoading(true)
     const p: Record<string, string> = {}
     if (filtroStatus) p.status = filtroStatus
-    const data = await api.get('/api/contratos/cprs/', { params: p }).then(r => r.data).catch(() => MOCK_CPRS)
+    const data = await api.get('/api/contratos/cprs/', { params: p }).then(r => r.data).catch(() => [])
     setRows(Array.isArray(data) ? data : [])
     setLoading(false)
   }
@@ -390,7 +390,7 @@ function TabBarter() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/contratos/barter/').then(r => r.data).catch(() => MOCK_BARTERS)
+    const data = await api.get('/api/contratos/barter/').then(r => r.data).catch(() => [])
     setRows(Array.isArray(data) ? data : [])
     setLoading(false)
   }
@@ -555,7 +555,7 @@ function TabTermo() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/contratos/termo/').then(r => r.data).catch(() => MOCK_TERMOS)
+    const data = await api.get('/api/contratos/termo/').then(r => r.data).catch(() => [])
     setRows(Array.isArray(data) ? data : [])
     setLoading(false)
   }
@@ -750,7 +750,7 @@ function TabAlertas() {
 
   const load = async () => {
     setLoading(true)
-    const data = await api.get('/api/contratos/alertas/').then(r => r.data).catch(() => MOCK_ALERTAS)
+    const data = await api.get('/api/contratos/alertas/').then(r => r.data).catch(() => [])
     setAlertas(Array.isArray(data) ? data : [])
     setLoading(false)
   }

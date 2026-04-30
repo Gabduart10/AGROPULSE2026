@@ -435,7 +435,7 @@ function AbaDatas() {
 // ─── página principal ─────────────────────────────────────────────────────────
 
 function AbaAuditoria() {
-  const [logs, setLogs] = useState<LogAuditoriaEntry[]>(MOCK_LOGS)
+  const [logs, setLogs] = useState<LogAuditoriaEntry[]>([])
   const [acaoFiltro, setAcaoFiltro] = useState('')
   const [modeloFiltro, setModeloFiltro] = useState('')
   const [dataInicio, setDataInicio] = useState('2026-04-20')

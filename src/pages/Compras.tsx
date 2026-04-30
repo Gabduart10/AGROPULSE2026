@@ -96,10 +96,10 @@ function TabRecebimento() {
     formData.append('arquivo', file)
     try {
       const { data } = await api.post('/api/importacao/xml-lote/', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
-      setNfe(data.nfe ?? MOCK_NFE)
+      setNfe(data.nfe ?? null)
       setFase('conferencia')
     } catch {
-      setNfe(MOCK_NFE)
+      setNfe(null)
       setFase('conferencia')
     } finally { setUploading(false) }
   }
@@ -169,7 +169,7 @@ function TabRecebimento() {
           <div className="bg-card2 border border-border rounded-xl p-5">
             <p className="text-sm font-semibold text-text-primary mb-1">Lançamento Manual</p>
             <p className="text-xs text-text-muted mb-3">Para notas que não possuem XML disponível.</p>
-            <button onClick={() => { setNfe(MOCK_NFE); setFase('conferencia') }} className="w-full border border-border text-text-muted text-sm font-medium py-2 rounded-lg hover:bg-card2 transition-colors">
+            <button onClick={() => { setNfe(null); setFase('conferencia') }} className="w-full border border-border text-text-muted text-sm font-medium py-2 rounded-lg hover:bg-card2 transition-colors">
               Lançar Manualmente
             </button>
           </div>
@@ -257,7 +257,7 @@ function TabHistorico() {
 
   useEffect(() => {
     api.get('/api/pedidos-compra/').then(({ data }) => setRows(data.results ?? data))
-      .catch(() => setRows(MOCK_PEDIDOS))
+      .catch(() => setRows([]))
   }, [])
 
   const statusColor: Record<string, 'green' | 'yellow' | 'gray' | 'blue' | 'red'> = {
@@ -342,7 +342,7 @@ function TabFornecedores() {
 
   useEffect(() => {
     api.get('/api/fornecedores/').then(({ data }) => setRows(data.results ?? data))
-      .catch(() => setRows(MOCK_FORNECEDORES))
+      .catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -479,7 +479,7 @@ function TabSolicitacoes() {
 
   useEffect(() => {
     api.get('/api/compras/solicitacoes/').then(({ data }) => setRows(data.results ?? data))
-      .catch(() => setRows(MOCK_SOLICITACOES))
+      .catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -575,7 +575,7 @@ function TabCotacoes() {
 
   useEffect(() => {
     api.get('/api/compras/cotacoes/').then(({ data }) => setRows(data.results ?? data))
-      .catch(() => setRows(MOCK_COTACOES))
+      .catch(() => setRows([]))
   }, [])
 
   async function save() {

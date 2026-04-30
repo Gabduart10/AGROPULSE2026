@@ -268,7 +268,7 @@ const MOCK_OCORRENCIAS: Ocorrencia[] = [
 // ─── Tab Frota ────────────────────────────────────────────────────────────────
 
 function TabFrota() {
-  const [rows, setRows] = useState<Veiculo[]>(MOCK_FROTA)
+  const [rows, setRows] = useState<Veiculo[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [detail, setDetail] = useState<Veiculo | null>(null)
@@ -414,7 +414,7 @@ function TabFrota() {
 // ─── Tab Programação de Cargas ────────────────────────────────────────────────
 
 function TabProgramacao() {
-  const [rows] = useState<Carga[]>(MOCK_CARGAS)
+  const [rows, setRows] = useState<Carga[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [detail, setDetail] = useState<Carga | null>(null)
@@ -519,7 +519,7 @@ function TabProgramacao() {
           <div className="space-y-4">
             <Field label="Veículo *">
               <Sel value={form.veiculo_id} onChange={v => setForm(f => ({ ...f, veiculo_id: v }))}>
-                {MOCK_FROTA.filter(v => v.status === 'disponivel').map(v => <option key={v.id} value={v.id}>{v.placa} — {v.descricao}</option>)}
+                {[]}
               </Sel>
             </Field>
             <div className="grid grid-cols-2 gap-4">
@@ -542,7 +542,7 @@ function TabProgramacao() {
 // ─── Tab Romaneios ────────────────────────────────────────────────────────────
 
 function TabRomaneios() {
-  const [rows] = useState<Romaneio[]>(MOCK_ROMANEIOS)
+  const [rows, setRows] = useState<Romaneio[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [ocorrencia, setOcorrencia] = useState<Romaneio | null>(null)
@@ -656,7 +656,7 @@ function TabRomaneios() {
 // ─── Tab CT-e / MDF-e ─────────────────────────────────────────────────────────
 
 function TabDocs() {
-  const [rows] = useState<DocTransporte[]>(MOCK_DOCS)
+  const [rows, setRows] = useState<DocTransporte[]>([])
   const [search, setSearch] = useState('')
   const [filterTipo, setFilterTipo] = useState('')
   const [modal, setModal] = useState<'cte' | 'mdfe' | null>(null)
@@ -720,7 +720,7 @@ function TabDocs() {
             <Field label={modal === 'cte' ? 'Tomador do Serviço *' : 'Carga Vinculada *'}>
               {modal === 'cte'
                 ? <input className={inp} value={form.tomador} onChange={e => setForm(f => ({ ...f, tomador: e.target.value }))} placeholder="Razão social ou nome do destinatário" />
-                : <Sel value={form.carga_numero} onChange={v => setForm(f => ({ ...f, carga_numero: v }))}><option value="">Selecionar carga...</option>{MOCK_CARGAS.map(c => <option key={c.id} value={c.numero}>{c.numero} — {c.regiao}</option>)}</Sel>}
+                : <Sel value={form.carga_numero} onChange={v => setForm(f => ({ ...f, carga_numero: v }))}><option value="">Selecionar carga...</option>{[]}</Sel>}
             </Field>
             <div className="grid grid-cols-2 gap-4">
               <Field label="UF Início *">
@@ -753,7 +753,7 @@ function TabDocs() {
 // ─── Tab Transportadoras ──────────────────────────────────────────────────────
 
 function TabTransportadoras() {
-  const [rows] = useState<Transportadora[]>(MOCK_TRANSPORTADORAS)
+  const [rows, setRows] = useState<Transportadora[]>([])
   const [search, setSearch] = useState('')
   const [detail, setDetail] = useState<Transportadora | null>(null)
   const [modal, setModal] = useState(false)
@@ -828,7 +828,7 @@ function TabTransportadoras() {
 // ─── Tab Abastecimento ────────────────────────────────────────────────────────
 
 function TabAbastecimento() {
-  const [rows, setRows] = useState<Abastecimento[]>(MOCK_ABASTECIMENTOS)
+  const [rows, setRows] = useState<Abastecimento[]>([])
   const [search, setSearch] = useState('')
   const [filterVeiculo, setFilterVeiculo] = useState('')
   const [modal, setModal] = useState(false)
@@ -850,7 +850,7 @@ function TabAbastecimento() {
 
   async function save() {
     setSaving(true)
-    const v = MOCK_FROTA.find(x => x.id === +form.veiculo_id)
+    const v = undefined
     try { await api.post('/api/abastecimentos/', form) } catch { /* mock */ }
     const litros = +form.litros; const preco = +form.preco_litro
     const n: Abastecimento = { id: Date.now(), veiculo_placa: v?.placa ?? '', veiculo_descricao: v?.descricao ?? '', data: form.data, km_hodometro: +form.km_hodometro, litros, preco_litro: preco, valor_total: +(litros * preco).toFixed(2), combustivel: form.combustivel as Abastecimento['combustivel'], posto: form.posto, motorista: form.motorista }
@@ -870,7 +870,7 @@ function TabAbastecimento() {
       <Bar value={search} onChange={setSearch} placeholder="Placa, posto ou motorista...">
         <Sel value={filterVeiculo} onChange={setFilterVeiculo}>
           <option value="">Todos os veículos</option>
-          {MOCK_FROTA.map(v => <option key={v.id} value={v.placa}>{v.placa} — {v.descricao}</option>)}
+          {[]}
         </Sel>
         <ExportButtons endpoint="/api/abastecimentos/" filename="abastecimentos" selectedIds={sel.size > 0 ? [...sel] : undefined} />
         <BtnNew onClick={() => { setForm({ veiculo_id:'1', data:'', km_hodometro:'', litros:'', preco_litro:'', combustivel:'diesel', posto:'', motorista:'' }); setModal(true) }} label="Registrar Abastecimento" />
@@ -900,7 +900,7 @@ function TabAbastecimento() {
           <div className="space-y-4">
             <Field label="Veículo *">
               <Sel value={form.veiculo_id} onChange={v => setForm(f => ({ ...f, veiculo_id: v }))}>
-                {MOCK_FROTA.map(v => <option key={v.id} value={v.id}>{v.placa} — {v.descricao}</option>)}
+                {[]}
               </Sel>
             </Field>
             <div className="grid grid-cols-2 gap-4">
@@ -985,21 +985,7 @@ function TabRelatorios() {
 
       <p className="text-sm font-semibold text-text-primary mb-3">Consumo de Combustível por Veículo</p>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-        {MOCK_FROTA.slice(0, 3).map(v => {
-          const abs = MOCK_ABASTECIMENTOS.filter(a => a.veiculo_placa === v.placa)
-          const litros = abs.reduce((s, a) => s + a.litros, 0)
-          const custo = abs.reduce((s, a) => s + a.valor_total, 0)
-          return (
-            <div key={v.id} className="bg-card2 border border-border rounded-xl p-4">
-              <p className="text-sm font-medium text-text-primary">{v.descricao}</p>
-              <p className="text-xs text-text-muted mb-3">{v.placa}</p>
-              <div className="grid grid-cols-2 gap-2">
-                <div><p className="text-xs text-text-muted">Litros</p><p className="font-mono font-bold text-text-primary">{litros.toLocaleString('pt-BR')}</p></div>
-                <div><p className="text-xs text-text-muted">Custo</p><p className="font-mono font-bold text-text-primary">R$ {custo.toFixed(2)}</p></div>
-              </div>
-            </div>
-          )
-        })}
+        {[]}
       </div>
     </div>
   )

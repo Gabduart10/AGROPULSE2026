@@ -108,7 +108,7 @@ function TabContasPagar() {
   const [pagarForm, setPagarForm] = useState({ data_pagamento: new Date().toISOString().split('T')[0], valor_pago: '', observacao: '' })
 
   useEffect(() => {
-    api.get('/api/contas-pagar/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_PAGAR))
+    api.get('/api/contas-pagar/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -308,7 +308,7 @@ function TabContasReceber() {
   const [renegForm, setRenegForm] = useState({ parcelas:'2', desconto_encargos:'0', observacao:'' })
 
   useEffect(() => {
-    api.get('/api/contas-receber/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_RECEBER))
+    api.get('/api/contas-receber/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function receber() {
@@ -526,7 +526,7 @@ function TabFluxo() {
   useEffect(() => {
     api.get(`/api/financeiro/fluxo-caixa/?visao=${visao}`)
       .then(({ data }) => setRows(data.linhas ?? data))
-      .catch(() => setRows(MOCK_FLUXO))
+      .catch(() => setRows([]))
   }, [visao])
 
   const saldoInicial = rows[0]?.saldo ? rows[0].saldo - rows[0].entradas + rows[0].saidas : 0
@@ -612,14 +612,14 @@ function TabConciliacao() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    api.get('/api/financeiro/contas-bancarias/').then(({ data }) => setContas(data.results ?? data)).catch(() => setContas(MOCK_CONTAS))
+    api.get('/api/financeiro/contas-bancarias/').then(({ data }) => setContas(data.results ?? data)).catch(() => setContas([]))
   }, [])
 
   useEffect(() => {
     if (!contaSelecionada) return
     api.get(`/api/financeiro/transacoes/?conta=${contaSelecionada}`)
       .then(({ data }) => setTransacoes(data.results ?? data))
-      .catch(() => setTransacoes(MOCK_TRANSACOES))
+      .catch(() => setTransacoes([]))
   }, [contaSelecionada])
 
   async function conciliar(id: number) {
@@ -725,7 +725,7 @@ function TabTesouraria() {
   const [form, setForm] = useState({ tipo:'cdb', banco:'', valor_aplicado:'', taxa_pct:'', data_aplicacao:'', vencimento:'', observacao:'' })
 
   useEffect(() => {
-    api.get('/api/financeiro/aplicacoes/').then(({ data }) => setAplicacoes(data.results ?? data)).catch(() => setAplicacoes(MOCK_APLICACOES))
+    api.get('/api/financeiro/aplicacoes/').then(({ data }) => setAplicacoes(data.results ?? data)).catch(() => setAplicacoes([]))
   }, [])
 
   async function save() {
@@ -839,7 +839,7 @@ function TabOrcamento() {
   const [form, setForm] = useState({ centro_custo:'', categoria:'', orcado_anual:'', distribuicao:'igual' })
 
   useEffect(() => {
-    api.get('/api/financeiro/orcamento/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_ORCAMENTO))
+    api.get('/api/financeiro/orcamento/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {

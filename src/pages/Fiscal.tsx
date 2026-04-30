@@ -303,7 +303,7 @@ function TabDocumentos() {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    api.get('/api/fiscal/documentos/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_DOCS))
+    api.get('/api/fiscal/documentos/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function cancelar() {
@@ -527,7 +527,7 @@ function TabContingencia() {
 
     api.get('/api/fiscal/contingencia/pendentes/').then(({ data }) => {
       setDocs(data.pendentes ?? data.results ?? data)
-    }).catch(() => setDocs(MOCK_CONTINGENCIA))
+    }).catch(() => setDocs([]))
   }
 
   useEffect(() => { fetchStatus() }, [])
@@ -648,9 +648,9 @@ function TabObrigacoesAgro() {
 
   useEffect(() => {
     if (subtab === 'gnre')
-      api.get('/api/fiscal/gnre/').then(({ data }) => setGnreRows(data.results ?? data)).catch(() => setGnreRows(MOCK_GNRE))
+      api.get('/api/fiscal/gnre/').then(({ data }) => setGnreRows(data.results ?? data)).catch(() => setGnreRows([]))
     if (subtab === 'suspensao')
-      api.get('/api/fiscal/suspensao-pis-cofins/').then(({ data }) => setSuspensaoRows(data.results ?? data)).catch(() => setSuspensaoRows(MOCK_SUSPENSAO))
+      api.get('/api/fiscal/suspensao-pis-cofins/').then(({ data }) => setSuspensaoRows(data.results ?? data)).catch(() => setSuspensaoRows([]))
   }, [subtab])
 
   async function calcularFunrural() {
@@ -826,7 +826,7 @@ function TabSped() {
 
   useEffect(() => {
     api.get('/api/fiscal/configuracao/').then(({ data }) => setConfig(data)).catch(() => {})
-    api.get('/api/fiscal/sped/historico/').then(({ data }) => setHistorico(data.results ?? data)).catch(() => setHistorico(MOCK_HISTORICO_SPED))
+    api.get('/api/fiscal/sped/historico/').then(({ data }) => setHistorico(data.results ?? data)).catch(() => setHistorico([]))
   }, [])
 
   async function gerar(tipo: string) {
@@ -1058,7 +1058,7 @@ function TabNotasEntradaSaida() {
   const [sel, setSel] = useState<Set<number>>(new Set())
 
   useEffect(() => {
-    api.get('/api/fiscal/notas-entrada-saida/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_NOTAS))
+    api.get('/api/fiscal/notas-entrada-saida/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   function onAtalhoEntrada(v: string) {

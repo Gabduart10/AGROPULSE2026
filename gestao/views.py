@@ -2127,8 +2127,9 @@ def api_login(request):
     # Superhost (is_staff sem empresa) bypassa a exigência de empresa
     is_superhost = user.is_staff and not user.empresa
 
-    # 2FA obrigatório para SuperHost — bloqueia login se não configurado
-    if is_superhost and not getattr(user, 'totp_habilitado', False):
+    # 2FA obrigatório para SuperHost — bloqueia login se não configurado (ignorado em DEBUG)
+    from django.conf import settings
+    if is_superhost and not getattr(user, 'totp_habilitado', False) and not settings.DEBUG:
         return Response({
             'erro': '2FA obrigatório para SuperHost. Configure o autenticador antes de continuar.',
             'requires_2fa_setup': True,

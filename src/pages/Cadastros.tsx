@@ -170,7 +170,7 @@ function TabProdutos() {
 
   async function fetch() {
     try { const { data } = await api.get('/api/produtos/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_PRODUTOS) }
+    catch { setRows([]) }
   }
 
   function openNew() { setEditing(null); setForm({ nome:'',sku:'',ean:'',tipo_produto:'insumo_agricola',metodo_custeio:'cmp',unidade_medida:'KG',preco_venda:'',estoque_minimo:'',margem_minima:'',comissao_percentual:'',ncm:'',cest:'',origem:'0',ativo:true }); setModal(true) }
@@ -344,12 +344,12 @@ function TabClientes() {
 
   useEffect(() => {
     fetch()
-    api.get('/api/tabelas-preco/').then(({ data }) => setTabelasOpcoes(data.results ?? data)).catch(() => setTabelasOpcoes(MOCK_TABELAS))
+    api.get('/api/tabelas-preco/').then(({ data }) => setTabelasOpcoes(data.results ?? data)).catch(() => setTabelasOpcoes([]))
   }, [])
 
   async function fetch() {
     try { const { data } = await api.get('/api/clientes/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_CLIENTES) }
+    catch { setRows([]) }
   }
 
   function openNew() { setEditing(null); setForm({tipo_pessoa:'PJ',tipo_cliente:'produtor_rural',nome_razao:'',nome_fantasia:'',cnpj_cpf:'',responsavel:'',telefone:'',endereco:'',limite_credito:'',ativo:true,tabela_preco_id:''}); setModal(true) }
@@ -505,7 +505,7 @@ function TabFornecedores() {
 
   async function fetch() {
     try { const { data } = await api.get('/api/fornecedores/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_FORNECEDORES) }
+    catch { setRows([]) }
   }
 
   function openNew() { setEditing(null); setForm({nome_razao:'',cnpj:'',telefone:'',email:'',endereco:'',contato_nome:'',condicao_pagamento:''}); setModal(true) }
@@ -584,7 +584,7 @@ function TabColaboradores() {
 
   async function fetch() {
     try { const { data } = await api.get('/api/rh/colaboradores/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_COLABORADORES) }
+    catch { setRows([]) }
   }
 
   async function save() {
@@ -675,7 +675,7 @@ function TabVeiculos() {
 
   async function fetch() {
     try { const { data } = await api.get('/api/veiculos/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_VEICULOS) }
+    catch { setRows([]) }
   }
 
   function openEdit(r: Veiculo) { setEditing(r); setForm({tipo:r.tipo,descricao:r.descricao,placa:r.placa,marca:r.marca,modelo:r.modelo,ano:r.ano,numero_serie:r.numero_serie||'',vencimento_doc:r.vencimento_doc||'',ativo:r.ativo}); setModal(true) }
@@ -762,7 +762,7 @@ function TabFazendas() {
 
   async function fetch() {
     try { const { data } = await api.get('/api/fazendas/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_FAZENDAS) }
+    catch { setRows([]) }
   }
 
   async function save() {
@@ -833,7 +833,7 @@ function TabTabelasPreco() {
 
   async function fetch() {
     try { const { data } = await api.get('/api/tabelas-preco/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_TABELAS) }
+    catch { setRows([]) }
   }
 
   async function save() {
@@ -901,7 +901,7 @@ const MOCK_TRANSPORTADORAS_CAD = [
 ]
 
 function TabTransportadoras() {
-  const [rows, setRows] = useState<Transportadora[]>(MOCK_TRANSPORTADORAS_CAD)
+  const [rows, setRows] = useState<Transportadora[]>([])
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(false)
   const [editing, setEditing] = useState<Transportadora | null>(null)
@@ -912,7 +912,7 @@ function TabTransportadoras() {
 
   async function loadRows() {
     try { const { data } = await api.get('/api/transportadoras/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_TRANSPORTADORAS_CAD) }
+    catch { setRows([]) }
   }
 
   function openNew() { setEditing(null); setForm({ nome_razao:'', cnpj:'', rntrc:'', telefone:'', email:'', contato_nome:'', endereco:'', municipio:'', uf:'' }); setModal(true) }

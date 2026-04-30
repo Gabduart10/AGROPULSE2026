@@ -90,7 +90,7 @@ function TabPosicao() {
 
   useEffect(() => {
     api.get('/api/produtos/').then(({ data }) => setProdutos(data.results ?? data))
-      .catch(() => setProdutos(MOCK_PRODUTOS))
+      .catch(() => setProdutos([]))
       .finally(() => setLoading(false))
   }, [])
 
@@ -202,7 +202,7 @@ function TabMovimentacoes() {
     try {
       const { data } = await api.get('/api/estoque/entradas-saidas/')
       setRows(data.movimentacoes ?? data.results ?? data)
-    } catch { setRows(MOCK_MOVIMENTACOES) }
+    } catch { setRows([]) }
   }
 
   async function save() {
@@ -355,8 +355,8 @@ function TabLotes() {
       ;(data.results ?? data).forEach((p: any) => {
         (p.lotes ?? []).forEach((l: any) => allLotes.push({ ...l, produto_nome: p.nome, produto_id: p.id }))
       })
-      setLotes(allLotes.length ? allLotes : MOCK_LOTES)
-    } catch { setLotes(MOCK_LOTES) }
+      setLotes(allLotes)
+    } catch { setLotes([]) }
   }
 
   async function save() {
@@ -463,8 +463,8 @@ function TabAlertas() {
   const [alertasValidade, setAlertasValidade] = useState<AlertaValidade[]>([])
 
   useEffect(() => {
-    api.get('/api/alertas/estoque/').then(({ data }) => setAlertasEstoque(data)).catch(() => setAlertasEstoque(MOCK_ALERTAS_ESTOQUE))
-    api.get('/api/alertas/validade/').then(({ data }) => setAlertasValidade(data)).catch(() => setAlertasValidade(MOCK_ALERTAS_VALIDADE))
+    api.get('/api/alertas/estoque/').then(({ data }) => setAlertasEstoque(data)).catch(() => setAlertasEstoque([]))
+    api.get('/api/alertas/validade/').then(({ data }) => setAlertasValidade(data)).catch(() => setAlertasValidade([]))
   }, [])
 
   return (
@@ -607,11 +607,11 @@ function TabInventario() {
     setIniciando(true)
     try {
       const { data } = await api.post('/api/estoque/inventario/', {})
-      const items = (data.itens ?? MOCK_PRODUTOS).map((p: any) => ({ produto: p.nome, sku: p.sku, sistema: p.quantidade, contado: '' }))
+      const items = (data.itens ?? []).map((p: any) => ({ produto: p.nome, sku: p.sku, sistema: p.quantidade, contado: '' }))
       setContagens(items)
       setFase('contagem')
     } catch {
-      setContagens(MOCK_PRODUTOS.map(p => ({ produto: p.nome, sku: p.sku, sistema: p.quantidade, contado: '' })))
+      setContagens([])
       setFase('contagem')
     } finally { setIniciando(false) }
   }

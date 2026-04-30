@@ -105,7 +105,7 @@ function TabOrdens() {
   const [apontamento, setApontamento] = useState({ quantidade_produzida: '', observacao: '' })
 
   useEffect(() => {
-    api.get('/api/producao/ordens/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_ORDENS))
+    api.get('/api/producao/ordens/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -322,7 +322,7 @@ function TabBOM() {
   const [itens, setItens] = useState<ItemBOM[]>([{ insumo: '', quantidade: 0, unidade: 'KG', tolerancia_pct: 5 }])
 
   useEffect(() => {
-    api.get('/api/producao/bom/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_BOMS))
+    api.get('/api/producao/bom/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -484,7 +484,7 @@ function TabQualidade() {
   const [form, setForm] = useState({ lote: '', produto: '', analista: '', data_analise: '', parametros: '', resultado: '', aprovado: true, observacao: '' })
 
   useEffect(() => {
-    api.get('/api/producao/laudos/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_LAUDOS))
+    api.get('/api/producao/laudos/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -588,7 +588,7 @@ function TabParadas() {
   const [form, setForm] = useState({ ordem_numero: '', causa: '', tipo_causa: 'mecanica', inicio: '', fim: '', impacto_unidades: '' })
 
   useEffect(() => {
-    api.get('/api/producao/paradas/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_PARADAS))
+    api.get('/api/producao/paradas/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -706,7 +706,7 @@ function TabOEE() {
   useEffect(() => {
     api.get(`/api/producao/oee/?mes=${mes}&ano=${ano}`)
       .then(({ data }) => setData(data))
-      .catch(() => setData(MOCK_OEE))
+      .catch(() => setData(null))
   }, [mes])
 
   const GaugeRing = ({ value, label, color }: { value: number; label: string; color: string }) => {

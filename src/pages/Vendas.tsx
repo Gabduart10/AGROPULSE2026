@@ -106,7 +106,7 @@ function TabPedidos() {
 
   async function fetchData() {
     try { const { data } = await api.get('/api/pedidos/'); setRows(data.results ?? data) }
-    catch { setRows(MOCK_PEDIDOS) }
+    catch { setRows([]) }
   }
 
   async function save() {
@@ -442,7 +442,7 @@ function TabOrcamentos() {
   const [itens, setItens] = useState([{ produto: '', quantidade: 1, preco_unitario: 0 }])
 
   useEffect(() => {
-    api.get('/api/orcamentos/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_ORCAMENTOS))
+    api.get('/api/orcamentos/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -623,7 +623,7 @@ function TabPDV() {
 
   function addItem() {
     if (!busca) return
-    const existing = MOCK_PRODUTOS_PDV.find(p => p.nome.toLowerCase().includes(busca.toLowerCase()) || p.ean === busca)
+    const existing = undefined
     const item = existing ?? { nome: busca, preco: 0, ean: '' }
     setItens(prev => {
       const found = prev.findIndex(i => i.nome === item.nome)
@@ -901,7 +901,7 @@ function TabAprovacoes() {
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    api.get('/api/aprovacoes/').then(({ data }) => setRows(data.fila ?? data.results ?? data)).catch(() => setRows(MOCK_APROVACOES))
+    api.get('/api/aprovacoes/').then(({ data }) => setRows(data.fila ?? data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function aprovar(id: number) {
@@ -983,7 +983,7 @@ function TabDevolucoes() {
   const [form, setForm] = useState({ pedido_original: '', motivo: '', destino_credito: 'abatimento', observacao: '' })
 
   useEffect(() => {
-    api.get('/api/devolucoes/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows(MOCK_DEVOLUCOES))
+    api.get('/api/devolucoes/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
   }, [])
 
   async function save() {
@@ -1075,7 +1075,7 @@ function TabComissoes() {
 
   useEffect(() => {
     api.get(`/api/comissoes/?mes=${mes}&ano=${ano}`).then(({ data }) => setRows(data.comissoes ?? data.results ?? data))
-      .catch(() => setRows(MOCK_COMISSOES))
+      .catch(() => setRows([]))
   }, [mes])
 
   const totalComissoes = rows.reduce((s, r) => s + r.comissao_total, 0)

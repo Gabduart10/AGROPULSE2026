@@ -258,7 +258,7 @@ const MOCK_CHECKLISTS: Checklist[] = [
 // ─── Tab Ativos ───────────────────────────────────────────────────────────────
 
 function TabAtivos() {
-  const [rows, setRows] = useState<Ativo[]>(MOCK_ATIVOS)
+  const [rows, setRows] = useState<Ativo[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [detail, setDetail] = useState<Ativo | null>(null)
@@ -402,7 +402,7 @@ function TabAtivos() {
 // ─── Tab Preventiva ───────────────────────────────────────────────────────────
 
 function TabPreventiva() {
-  const [rows, setRows] = useState<PlanoManutencao[]>(MOCK_PLANOS)
+  const [rows, setRows] = useState<PlanoManutencao[]>([])
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(false)
   const [baixaModal, setBaixaModal] = useState<PlanoManutencao | null>(null)
@@ -503,7 +503,7 @@ function TabPreventiva() {
           <div className="space-y-4">
             <Field label="Ativo *">
               <Sel value={form.ativo_id} onChange={v => setForm(f => ({ ...f, ativo_id: v }))}>
-                {MOCK_ATIVOS.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <Field label="Descrição da Manutenção *"><input className={inp} value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} placeholder="Ex: Troca de óleo motor + filtros" /></Field>
@@ -530,7 +530,7 @@ function TabPreventiva() {
 // ─── Tab Ordens de Serviço ────────────────────────────────────────────────────
 
 function TabOrdens() {
-  const [rows, setRows] = useState<OrdemServico[]>(MOCK_OS)
+  const [rows, setRows] = useState<OrdemServico[]>([])
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [detail, setDetail] = useState<OrdemServico | null>(null)
@@ -554,7 +554,7 @@ function TabOrdens() {
 
   async function save() {
     setSaving(true)
-    const ativo = MOCK_ATIVOS.find(a => a.id === +form.ativo_id)
+    const ativo = undefined
     try { await api.post('/api/ordens-servico/', form) } catch { /* mock */ }
     const num = `OS-${new Date().getFullYear()}-${String(rows.length + 20).padStart(3, '0')}`
     const n: OrdemServico = { id: Date.now(), numero: num, ativo_id: +form.ativo_id, ativo_nome: ativo?.nome ?? '', tipo: form.tipo as OrdemServico['tipo'], prioridade: form.prioridade as OrdemServico['prioridade'], descricao: form.descricao, responsavel: form.responsavel, data_abertura: new Date().toISOString().split('T')[0], data_previsao: form.data_previsao || undefined, pecas: [], custo_mao_obra: 0, status: 'aberta' }
@@ -648,7 +648,7 @@ function TabOrdens() {
           <div className="space-y-4">
             <Field label="Ativo *">
               <Sel value={form.ativo_id} onChange={v => setForm(f => ({ ...f, ativo_id: v }))}>
-                {MOCK_ATIVOS.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <div className="grid grid-cols-2 gap-4">
@@ -683,7 +683,7 @@ function TabOrdens() {
 // ─── Tab Peças / Sobressalentes ───────────────────────────────────────────────
 
 function TabPecas() {
-  const [rows] = useState<Peca[]>(MOCK_PECAS)
+  const [rows, setRows] = useState<Peca[]>([])
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -763,7 +763,7 @@ function TabPecas() {
 // ─── Tab Checklist ────────────────────────────────────────────────────────────
 
 function TabChecklist() {
-  const [rows] = useState<Checklist[]>(MOCK_CHECKLISTS)
+  const [rows, setRows] = useState<Checklist[]>([])
   const [detail, setDetail] = useState<Checklist | null>(null)
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(false)
@@ -783,7 +783,7 @@ function TabChecklist() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <KpiCard label="Checklists Hoje" val={rows.filter(r => r.data === '2026-04-21').length} sub={`de ${MOCK_ATIVOS.length} ativos`} />
+        <KpiCard label="Checklists Hoje" val={rows.filter(r => r.data === '2026-04-21').length} sub="de 0 ativos" />
         <KpiCard label="Aprovados" val={rows.filter(r => r.status === 'aprovado').length} ok />
         <KpiCard label="Com Ressalvas" val={rows.filter(r => r.status === 'aprovado_ressalvas').length} warn />
         <KpiCard label="Reprovados" val={reprovados} warn={reprovados > 0} sub="OS necessária" />
@@ -846,7 +846,7 @@ function TabChecklist() {
           <div className="space-y-4">
             <Field label="Ativo *">
               <Sel value={form.ativo_id} onChange={v => setForm(f => ({ ...f, ativo_id: v }))}>
-                {MOCK_ATIVOS.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+                {[]}
               </Sel>
             </Field>
             <div className="grid grid-cols-2 gap-4">
@@ -879,9 +879,9 @@ function TabDepreciacao() {
     return { deprecAnual, deprecMensal: deprecAnual / 12, deprecAcum, valorContabil, pct: Math.min(pct, 100) }
   }
 
-  const totalAquisicao = MOCK_ATIVOS.reduce((s, a) => s + a.valor_aquisicao, 0)
-  const totalContabil = MOCK_ATIVOS.reduce((s, a) => s + calcDeprec(a).valorContabil, 0)
-  const totalMensal = MOCK_ATIVOS.reduce((s, a) => s + calcDeprec(a).deprecMensal, 0)
+  const totalAquisicao = 0
+  const totalContabil = 0
+  const totalMensal = 0
 
   const fmtR = (v: number) => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits:0, maximumFractionDigits:0 })}`
 
@@ -891,7 +891,7 @@ function TabDepreciacao() {
         <KpiCard label="Valor Total Aquisição" val={fmtR(totalAquisicao)} />
         <KpiCard label="Valor Contábil Atual" val={fmtR(totalContabil)} sub="após depreciações" />
         <KpiCard label="Depreciação Mensal" val={fmtR(totalMensal)} sub="lançar no DRE" />
-        <KpiCard label="Ativos Totalmente Dep." val={MOCK_ATIVOS.filter(a => calcDeprec(a).pct >= 100).length} />
+        <KpiCard label="Ativos Totalmente Dep." val={0} />
       </div>
 
       <div className="bg-card border border-border rounded-xl overflow-x-auto">
@@ -904,30 +904,7 @@ function TabDepreciacao() {
             </tr>
           </thead>
           <tbody>
-            {MOCK_ATIVOS.map(a => {
-              const d = calcDeprec(a)
-              return (
-                <tr key={a.id} className="border-b border-border/50 hover:bg-card2">
-                  <td className="px-4 py-3 font-medium text-text-primary">{a.nome}</td>
-                  <td className="px-4 py-3 font-mono text-text-secondary">{a.data_aquisicao}</td>
-                  <td className="px-4 py-3 font-mono text-text-secondary">{fmtR(a.valor_aquisicao)}</td>
-                  <td className="px-4 py-3 font-mono text-text-muted">{a.vida_util_anos} anos</td>
-                  <td className="px-4 py-3 text-text-muted">{a.metodo_depreciacao === 'linear' ? 'Linear' : 'Acelerada'}</td>
-                  <td className="px-4 py-3 font-mono text-text-secondary">{fmtR(d.deprecAnual)}</td>
-                  <td className="px-4 py-3 font-mono text-accent">{fmtR(d.deprecMensal)}</td>
-                  <td className="px-4 py-3 font-mono text-text-secondary">{fmtR(d.deprecAcum)}</td>
-                  <td className="px-4 py-3 font-mono font-semibold text-text-primary">{fmtR(d.valorContabil)}</td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="w-16 bg-card2 rounded-full h-1.5">
-                        <div className="bg-accent h-1.5 rounded-full" style={{ width: `${d.pct}%` }} />
-                      </div>
-                      <span className="text-xs font-mono text-text-muted">{d.pct.toFixed(1)}%</span>
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
+            {[]}
             <tr className="border-t-2 border-border bg-card2 font-bold">
               <td colSpan={2} className="px-4 py-3 text-text-secondary text-sm">Total</td>
               <td className="px-4 py-3 font-mono text-text-primary">{fmtR(totalAquisicao)}</td>
@@ -952,13 +929,7 @@ function TabRelatorios() {
   const [agrup, setAgrup] = useState('ativo')
   const fmtR = (v: number) => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits:2 })}`
 
-  const custoPorAtivo = MOCK_ATIVOS.map(a => {
-    const os = MOCK_OS.filter(o => o.ativo_id === a.id && o.status === 'concluida')
-    const custoCorrevo = os.filter(o => o.tipo === 'corretiva').reduce((s, o) => s + o.pecas.reduce((sp, p) => sp + p.qtd * p.valor_unit, 0) + o.custo_mao_obra, 0)
-    const custoPrev = os.filter(o => o.tipo === 'preventiva').reduce((s, o) => s + o.pecas.reduce((sp, p) => sp + p.qtd * p.valor_unit, 0) + o.custo_mao_obra, 0)
-    const intervencoes = os.length
-    return { nome: a.nome, corretiva: custoCorrevo, preventiva: custoPrev, total: custoCorrevo + custoPrev, intervencoes }
-  }).filter(r => r.total > 0)
+  const custoPorAtivo: any[] = [].filter(r => r.total > 0)
 
   const totalGeral = custoPorAtivo.reduce((s, r) => s + r.total, 0)
   const totalPrev = custoPorAtivo.reduce((s, r) => s + r.preventiva, 0)
@@ -981,7 +952,7 @@ function TabRelatorios() {
         <KpiCard label="Custo Total Manutenção" val={fmtR(totalGeral)} />
         <KpiCard label="Preventiva" val={fmtR(totalPrev)} sub={`${ratioPreventivo}% do total`} ok />
         <KpiCard label="Corretiva" val={fmtR(totalCorr)} warn={totalCorr > totalPrev} sub={`${(100 - +ratioPreventivo).toFixed(1)}% do total`} />
-        <KpiCard label="OS Concluídas" val={MOCK_OS.filter(o => o.status === 'concluida').length} />
+        <KpiCard label="OS Concluídas" val={0} />
       </div>
 
       {+ratioPreventivo < 60 && (
@@ -1020,7 +991,7 @@ function TabRelatorios() {
               <td className="px-4 py-3 font-mono text-emerald-400">{fmtR(totalPrev)}</td>
               <td className="px-4 py-3 font-mono text-orange-400">{fmtR(totalCorr)}</td>
               <td className="px-4 py-3 font-mono text-text-primary">{fmtR(totalGeral)}</td>
-              <td className="px-4 py-3 font-mono text-text-secondary">{MOCK_OS.filter(o => o.status === 'concluida').length}</td>
+              <td className="px-4 py-3 font-mono text-text-secondary">0</td>
               <td className="px-4 py-3 font-mono text-text-muted">{ratioPreventivo}%</td>
             </tr>
           </tbody>
