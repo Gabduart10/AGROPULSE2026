@@ -124,10 +124,9 @@ CORS_ALLOW_HEADERS = [
 # ==========================================
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
-    default='https://*.github.dev,https://*.app.github.dev,https://localhost:8000,http://127.0.0.1:8000,https://agropulse-2026-6ozw.vercel.app',
+    default='https://.github.dev,https://.app.github.dev,https://localhost:8000,http://127.0.0.1:8000,https://agropulse-2026-6ozw.vercel.app,https://web-production-e97062.up.railway.app',
     cast=Csv()
 )
-
 SESSION_COOKIE_SAMESITE = 'None'
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SAMESITE = 'None'
