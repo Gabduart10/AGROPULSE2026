@@ -2542,9 +2542,11 @@ class ItemTabelaPreco(models.Model):
 
 class Veiculo(models.Model):
     TIPO_CHOICES = [
-        ('veiculo',    'Veículo'),
-        ('equipamento','Equipamento'),
-        ('maquina',    'Máquina Agrícola'),
+        ('caminhao', 'Caminhão'),
+        ('van', 'Van / VUC'),
+        ('pickup', 'Pickup'),
+        ('trator', 'Trator'),
+        ('outro', 'Outro'),
     ]
     empresa         = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name='veiculos')
     tipo            = models.CharField(max_length=15, choices=TIPO_CHOICES, default='veiculo')

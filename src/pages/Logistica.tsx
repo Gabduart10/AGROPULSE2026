@@ -284,12 +284,40 @@ function TabFrota() {
     (filterStatus ? r.status === filterStatus : true)
   )
 
-  async function save() {
+ async function save() {
     setSaving(true)
-    try { await api.post('/api/veiculos/', form) } catch { /* mock */ }
-    const n: Veiculo = { id: Date.now(), tipo: form.tipo, placa: form.placa, marca: form.marca, modelo: form.modelo, ano: +form.ano, descricao: form.descricao, capacidade_kg: +form.capacidade_kg, vencimento_crlv: form.vencimento_crlv, vencimento_tacografo: form.vencimento_tacografo || undefined, motorista_nome: form.motorista_nome || undefined, motorista_cnh: form.motorista_cnh || undefined, motorista_categoria: form.motorista_categoria, status: 'disponivel', km_atual: 0 }
-    setRows(r => [...r, n])
-    setModal(false); setSaving(false)
+    try { 
+      // Enviando o formulário + a empresa
+      await api.post('/api/veiculos/', {
+        ...form,
+        empresa: 1
+      })
+      
+      const n: Veiculo = { 
+        id: Date.now(), 
+        tipo: form.tipo, 
+        placa: form.placa, 
+        marca: form.marca, 
+        modelo: form.modelo, 
+        ano: +form.ano, 
+        descricao: form.descricao, 
+        capacidade_kg: +form.capacidade_kg, 
+        vencimento_crlv: form.vencimento_crlv, 
+        vencimento_tacografo: form.vencimento_tacografo || undefined, 
+        motorista_nome: form.motorista_nome || undefined, 
+        motorista_cnh: form.motorista_cnh || undefined, 
+        motorista_categoria: form.motorista_categoria, 
+        status: 'disponivel', 
+        km_atual: 0 
+      }
+      setRows(r => [...r, n])
+      setModal(false) 
+    } catch (error) {
+      console.error("Erro ao salvar:", error)
+      alert("Erro ao salvar o veículo. Verifique o console.")
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
@@ -850,7 +878,7 @@ function TabAbastecimento() {
 
   async function save() {
     setSaving(true)
-    const v = undefined
+    const v = MOCK_FROTA.find(veiculo => veiculo.id === Number(form.veiculo_id))
     try { await api.post('/api/abastecimentos/', form) } catch { /* mock */ }
     const litros = +form.litros; const preco = +form.preco_litro
     const n: Abastecimento = { id: Date.now(), veiculo_placa: v?.placa ?? '', veiculo_descricao: v?.descricao ?? '', data: form.data, km_hodometro: +form.km_hodometro, litros, preco_litro: preco, valor_total: +(litros * preco).toFixed(2), combustivel: form.combustivel as Abastecimento['combustivel'], posto: form.posto, motorista: form.motorista }
