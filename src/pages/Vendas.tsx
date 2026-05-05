@@ -123,12 +123,15 @@ function TabPedidos() {
   async function save() {
     setSaving(true)
     try {
-      const payload = {
-        empresa: 1, // Empresa obrigatória!
+     const payload = {
+        empresa: 1, 
         cliente: Number(form.cliente),
         vendedor: Number(form.vendedor),
         condicao_pagamento: Number(form.condicao_pagamento),
         forma_pagamento: Number(form.forma_pagamento),
+        
+        status: 'aguardando', // <--- ADICIONE ESTA LINHA AQUI!
+        
         observacao: form.observacao,
         itens: itens.map(i => ({
           produto: Number(i.produto),
