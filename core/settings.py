@@ -124,7 +124,7 @@ CORS_ALLOW_HEADERS = [
 # ==========================================
 CSRF_TRUSTED_ORIGINS = config(
     'CSRF_TRUSTED_ORIGINS',
-    default='https://.github.dev,https://.app.github.dev,https://localhost:8000,http://127.0.0.1:8000,https://agropulse-2026-6ozw.vercel.app,https://web-production-e97062.up.railway.app',
+    default='https://*.railway.app,https://*.up.railway.app,https://agropulse-2026-6ozw.vercel.app,http://127.0.0.1:8000,https://localhost:8000',
     cast=Csv()
 )
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -160,3 +160,17 @@ AWS_ACCESS_KEY_ID = config('AWS_ACCESS_KEY_ID', default='sua-access-key')
 AWS_SECRET_ACCESS_KEY = config('AWS_SECRET_ACCESS_KEY', default='sua-secret-key')
 AWS_S3_REGION = config('AWS_S3_REGION', default='us-east-1')
 AWS_S3_BUCKET_NAME = config('AWS_S3_BUCKET_NAME', default='agropulse-arquivos')
+
+
+# ==========================================
+# CONFIGURAÇÕES DE SEGURANÇA (NUVEM / RAILWAY)
+# ==========================================
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Garante que os cookies só viajem por HTTPS
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = True
+
+# Permite que o cookie seja lido entre domínios diferentes (útil para o seu React na Vercel)
+CSRF_COOKIE_SAMESITE = 'None'
+SESSION_COOKIE_SAMESITE = 'None'
