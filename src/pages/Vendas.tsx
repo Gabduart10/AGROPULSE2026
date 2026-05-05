@@ -108,13 +108,15 @@ function TabPedidos() {
 
  async function fetchData() {
     try { 
-      // Forçando o parâmetro de empresa que o Django gosta
-      const { data } = await api.get('/api/pedidos/?empresa=1')
+      // Forçamos o parâmetro da empresa diretamente no Axios para o Django nos liberar os dados!
+      const { data } = await api.get('/api/pedidos/', { 
+        params: { empresa_id: 1, empresa: 1 } // Mandamos os dois formatos possíveis por precaução
+      })
       const lista = data.results ?? data
       setRows(Array.isArray(lista) ? lista : []) 
     }
     catch (error) { 
-      console.error("Erro ao buscar:", error)
+      console.error("Erro ao buscar pedidos:", error)
       setRows([]) 
     }
   }
@@ -193,8 +195,9 @@ function TabPedidos() {
   const canCancelar = (s: string) => ['aguardando', 'aprovado', 'em_analise'].includes(s)
   const canDevolver = (s: string) => s === 'faturado'
 
- const filtered = rows.filter(r =>
-    (((r as any).cliente_nome || `Cliente ${(r as any).cliente}`).toLowerCase().includes(search.toLowerCase()) || String(r.id).includes(search)) &&
+// E deixamos o filtro blindado (à prova de telas brancas) caso o Django devolva só o ID do cliente
+  const filtered = rows.filter(r =>
+    (((r as any).cliente_nome || `Cliente ID ${(r as any).cliente || ''}`).toLowerCase().includes(search.toLowerCase()) || String(r.id).includes(search)) &&
     (filterStatus ? r.status === filterStatus : true)
   )
 
@@ -264,7 +267,9 @@ function TabPedidos() {
               <tr key={r.id} className={`border-b border-border/50 hover:bg-card2 transition-colors ${sel.has(r.id) ? 'bg-accent/5' : ''}`}>
                 <td className="px-4 py-3"><input type="checkbox" className="rounded" checked={sel.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
                 <td className="px-4 py-3 font-mono text-text-muted text-xs">#{r.id}</td>
-                <td className="px-4 py-3 font-medium text-text-primary">{(r as any).cliente_nome || `Cliente ID ${(r as any).cliente}`}</td>
+                <td className="px-4 py-3 font-medium text-text-primary">
+  {(r as any).cliente_nome || `Cliente ID ${(r as any).cliente}`}
+</td>
                 <td className="px-4 py-3 text-text-muted">{r.vendedor_nome || '—'}</td>
                 <td className="px-4 py-3 text-text-muted text-xs">{r.data_pedido}</td>
                 <td className="px-4 py-3 text-text-muted">{r.condicao_pagamento || '—'}</td>
