@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import {
   Plus, Search, X, ChevronDown, Truck, MapPin, FileText,
   Fuel, AlertTriangle, CheckCircle2, Clock, Navigation,
@@ -275,6 +275,22 @@ function TabFrota() {
   const [modal, setModal] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ tipo:'caminhao', placa:'', marca:'', modelo:'', ano:String(new Date().getFullYear()), descricao:'', capacidade_kg:'', capacidade_m3:'', vencimento_crlv:'', vencimento_tacografo:'', motorista_nome:'', motorista_cnh:'', motorista_categoria:'B' })
+
+  // ─── BLOCO ADICIONADO PARA BUSCAR DADOS DO BACKEND ───
+  useEffect(() => {
+    async function carregarFrota() {
+      try {
+        const res = await api.get('/api/veiculos/')
+        const listaVeiculos = res.data.results ? res.data.results : res.data
+        setRows(listaVeiculos) 
+      } catch (error) {
+        console.error('Erro ao buscar a frota:', error)
+      }
+    }
+
+    carregarFrota()
+  }, [])
+  // ──────────────────────────────────────────────────────
 
   const hoje = new Date().toISOString().split('T')[0]
   const vencendo = rows.filter(r => r.vencimento_crlv <= new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0]).length
