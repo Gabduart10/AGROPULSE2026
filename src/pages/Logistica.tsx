@@ -267,6 +267,8 @@ const MOCK_OCORRENCIAS: Ocorrencia[] = [
 
 // ─── Tab Frota ────────────────────────────────────────────────────────────────
 
+// ─── Tab Frota ────────────────────────────────────────────────────────────────
+
 function TabFrota() {
   const [rows, setRows] = useState<Veiculo[]>([])
   const [search, setSearch] = useState('')
@@ -276,55 +278,51 @@ function TabFrota() {
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ tipo:'caminhao', placa:'', marca:'', modelo:'', ano:String(new Date().getFullYear()), descricao:'', capacidade_kg:'', capacidade_m3:'', vencimento_crlv:'', vencimento_tacografo:'', motorista_nome:'', motorista_cnh:'', motorista_categoria:'B' })
 
-  // ─── BLOCO ADICIONADO PARA BUSCAR DADOS DO BACKEND ───
+  // ─── BLOCO COM TRAVA DE SEGURANÇA ───
   useEffect(() => {
     async function carregarFrota() {
       try {
         const res = await api.get('/api/veiculos/')
-        const listaVeiculos = res.data.results ? res.data.results : res.data
-        setRows(listaVeiculos) 
+        const listaVeiculos = res.data?.results ? res.data.results : res.data
+        
+        // Garante que o React só tente renderizar se a API devolver uma Lista (Array)
+        if (Array.isArray(listaVeiculos)) {
+          setRows(listaVeiculos) 
+        } else {
+          setRows([])
+        }
       } catch (error) {
         console.error('Erro ao buscar a frota:', error)
       }
     }
-
     carregarFrota()
   }, [])
   // ──────────────────────────────────────────────────────
 
   const hoje = new Date().toISOString().split('T')[0]
-  const vencendo = rows.filter(r => r.vencimento_crlv <= new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0]).length
+  
+  // Trava de segurança para datas nulas
+  const vencendo = rows.filter(r => r.vencimento_crlv && r.vencimento_crlv <= new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0]).length
 
+  // Trava de segurança para textos nulos
   const filtered = rows.filter(r =>
-    (r.placa.toLowerCase().includes(search.toLowerCase()) || r.descricao.toLowerCase().includes(search.toLowerCase()) || (r.motorista_nome ?? '').toLowerCase().includes(search.toLowerCase())) &&
+    ((r.placa || '').toLowerCase().includes(search.toLowerCase()) || 
+     (r.descricao || '').toLowerCase().includes(search.toLowerCase()) || 
+     (r.motorista_nome || '').toLowerCase().includes(search.toLowerCase())) &&
     (filterStatus ? r.status === filterStatus : true)
   )
 
  async function save() {
     setSaving(true)
     try { 
-      // Enviando o formulário + a empresa
-      await api.post('/api/veiculos/', {
-        ...form,
-        empresa: 1
-      })
+      await api.post('/api/veiculos/', { ...form, empresa: 1 })
       
       const n: Veiculo = { 
-        id: Date.now(), 
-        tipo: form.tipo, 
-        placa: form.placa, 
-        marca: form.marca, 
-        modelo: form.modelo, 
-        ano: +form.ano, 
-        descricao: form.descricao, 
-        capacidade_kg: +form.capacidade_kg, 
-        vencimento_crlv: form.vencimento_crlv, 
-        vencimento_tacografo: form.vencimento_tacografo || undefined, 
-        motorista_nome: form.motorista_nome || undefined, 
-        motorista_cnh: form.motorista_cnh || undefined, 
-        motorista_categoria: form.motorista_categoria, 
-        status: 'disponivel', 
-        km_atual: 0 
+        id: Date.now(), tipo: form.tipo, placa: form.placa, marca: form.marca, modelo: form.modelo, 
+        ano: +form.ano, descricao: form.descricao, capacidade_kg: +form.capacidade_kg, 
+        vencimento_crlv: form.vencimento_crlv, vencimento_tacografo: form.vencimento_tacografo || undefined, 
+        motorista_nome: form.motorista_nome || undefined, motorista_cnh: form.motorista_cnh || undefined, 
+        motorista_categoria: form.motorista_categoria, status: 'disponivel', km_atual: 0 
       }
       setRows(r => [...r, n])
       setModal(false) 
@@ -362,11 +360,14 @@ function TabFrota() {
             <Td mono>{r.placa}</Td>
             <TdMain>{r.descricao}<span className="block text-xs text-text-muted font-normal">{r.marca} {r.modelo} {r.ano}</span></TdMain>
             <Td>{r.motorista_nome}<span className="block text-xs text-text-muted">CNH {r.motorista_categoria} — {r.motorista_cnh?.slice(0,6)}***</span></Td>
-            <Td mono>{r.capacidade_kg.toLocaleString('pt-BR')} kg{r.capacidade_m3 ? ` / ${r.capacidade_m3} m³` : ''}</Td>
-            <Td mono>{r.km_atual.toLocaleString('pt-BR')} km</Td>
+            
+            {/* Travas de segurança aplicadas nos números abaixo (Number(...) || 0) */}
+            <Td mono>{Number(r.capacidade_kg || 0).toLocaleString('pt-BR')} kg{r.capacidade_m3 ? ` / ${r.capacidade_m3} m³` : ''}</Td>
+            <Td mono>{Number(r.km_atual || 0).toLocaleString('pt-BR')} km</Td>
+            
             <td className="px-4 py-3">
-              <span className={`text-xs font-mono ${r.vencimento_crlv < hoje ? 'text-red-400' : r.vencimento_crlv <= new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0] ? 'text-amber-300' : 'text-text-muted'}`}>
-                {r.vencimento_crlv}
+              <span className={`text-xs font-mono ${!r.vencimento_crlv ? 'text-text-muted' : r.vencimento_crlv < hoje ? 'text-red-400' : r.vencimento_crlv <= new Date(Date.now() + 60 * 86400000).toISOString().split('T')[0] ? 'text-amber-300' : 'text-text-muted'}`}>
+                {r.vencimento_crlv || '—'}
               </span>
             </td>
             <td className="px-4 py-3">
@@ -374,7 +375,7 @@ function TabFrota() {
                 ? <span className="flex items-center gap-1 text-xs text-accent"><Navigation size={11} />{r.ultima_posicao}</span>
                 : <span className="text-xs text-text-muted">—</span>}
             </td>
-            <td className="px-4 py-3"><StatusBadge status={r.status} /></td>
+            <td className="px-4 py-3"><StatusBadge status={r.status || 'inativo'} /></td>
             <td className="px-4 py-3 w-12">
               <button onClick={() => setDetail(r)} className="p-1.5 hover:bg-card rounded text-text-muted hover:text-accent transition-colors"><Eye size={14} /></button>
             </td>
@@ -386,7 +387,10 @@ function TabFrota() {
         <Modal title={`${detail.placa} — ${detail.descricao}`} onClose={() => setDetail(null)} wide>
           <div className="space-y-4 text-sm">
             <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-              {[['Tipo', detail.tipo], ['Placa', detail.placa], ['Marca / Modelo', `${detail.marca} ${detail.modelo}`], ['Ano', detail.ano], ['Capacidade', `${detail.capacidade_kg.toLocaleString('pt-BR')} kg${detail.capacidade_m3 ? ` / ${detail.capacidade_m3} m³` : ''}`], ['KM Atual', `${detail.km_atual.toLocaleString('pt-BR')} km`], ['Venc. CRLV', detail.vencimento_crlv], ['Venc. Tacógrafo', detail.vencimento_tacografo ?? '—']].map(([k, v]) => (
+              {[['Tipo', detail.tipo], ['Placa', detail.placa], ['Marca / Modelo', `${detail.marca || ''} ${detail.modelo || ''}`], ['Ano', detail.ano], 
+                ['Capacidade', `${Number(detail.capacidade_kg || 0).toLocaleString('pt-BR')} kg${detail.capacidade_m3 ? ` / ${detail.capacidade_m3} m³` : ''}`], 
+                ['KM Atual', `${Number(detail.km_atual || 0).toLocaleString('pt-BR')} km`], 
+                ['Venc. CRLV', detail.vencimento_crlv || '—'], ['Venc. Tacógrafo', detail.vencimento_tacografo ?? '—']].map(([k, v]) => (
                 <div key={k}><span className="text-text-muted text-xs">{k}</span><p className="text-text-primary font-medium">{String(v)}</p></div>
               ))}
             </div>
@@ -414,6 +418,7 @@ function TabFrota() {
       {modal && (
         <Modal title="Cadastrar Veículo" onClose={() => setModal(false)} wide>
           <div className="space-y-4">
+            {/* O modal de cadastro de veículos continua igualzinho aqui */}
             <div className="grid grid-cols-2 gap-4">
               <Field label="Tipo *">
                 <Sel value={form.tipo} onChange={v => setForm(f => ({ ...f, tipo: v }))}>
