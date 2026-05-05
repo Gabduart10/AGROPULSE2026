@@ -106,13 +106,17 @@ function TabPedidos() {
 
   useEffect(() => { fetchData() }, [])
 
-  async function fetchData() {
+ async function fetchData() {
     try { 
-      const { data } = await api.get('/api/pedidos/')
+      // Forçando o parâmetro de empresa que o Django gosta
+      const { data } = await api.get('/api/pedidos/?empresa=1')
       const lista = data.results ?? data
       setRows(Array.isArray(lista) ? lista : []) 
     }
-    catch { setRows([]) }
+    catch (error) { 
+      console.error("Erro ao buscar:", error)
+      setRows([]) 
+    }
   }
 
   // ── AQUI: Função save() converte tudo para números (IDs)
@@ -186,8 +190,8 @@ function TabPedidos() {
   const canCancelar = (s: string) => ['aguardando', 'aprovado', 'em_analise'].includes(s)
   const canDevolver = (s: string) => s === 'faturado'
 
-  const filtered = rows.filter(r =>
-    (r.cliente_nome?.toLowerCase().includes(search.toLowerCase()) || String(r.id).includes(search)) &&
+ const filtered = rows.filter(r =>
+    (((r as any).cliente_nome || `Cliente ${(r as any).cliente}`).toLowerCase().includes(search.toLowerCase()) || String(r.id).includes(search)) &&
     (filterStatus ? r.status === filterStatus : true)
   )
 
@@ -257,7 +261,7 @@ function TabPedidos() {
               <tr key={r.id} className={`border-b border-border/50 hover:bg-card2 transition-colors ${sel.has(r.id) ? 'bg-accent/5' : ''}`}>
                 <td className="px-4 py-3"><input type="checkbox" className="rounded" checked={sel.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
                 <td className="px-4 py-3 font-mono text-text-muted text-xs">#{r.id}</td>
-                <td className="px-4 py-3 font-medium text-text-primary">{r.cliente_nome}</td>
+                <td className="px-4 py-3 font-medium text-text-primary">{(r as any).cliente_nome || `Cliente ID ${(r as any).cliente}`}</td>
                 <td className="px-4 py-3 text-text-muted">{r.vendedor_nome || '—'}</td>
                 <td className="px-4 py-3 text-text-muted text-xs">{r.data_pedido}</td>
                 <td className="px-4 py-3 text-text-muted">{r.condicao_pagamento || '—'}</td>
