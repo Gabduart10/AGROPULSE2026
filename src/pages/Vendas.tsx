@@ -91,8 +91,10 @@ function TabPedidos() {
   const [sel, setSel] = useState<Set<number>>(new Set())
   const [modal, setModal] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ cliente: '', vendedor: '', condicao_pagamento: '30', forma_pagamento: 'boleto', observacao: '' })
-  const [itens, setItens] = useState<ItemPedido[]>([{ produto: '', quantidade: 1, preco_unitario: 0, desconto: 0 }])
+  
+  // ── AQUI: Estado inicial ajustado para mandar '1' (IDs reais) em vez de texto solto
+  const [form, setForm] = useState({ cliente: '1', vendedor: '1', condicao_pagamento: '1', forma_pagamento: '1', observacao: '' })
+  const [itens, setItens] = useState<ItemPedido[]>([{ produto: '1', quantidade: 1, preco_unitario: 150, desconto: 0 }])
 
   // action modals
   const [faturarModal, setFaturarModal] = useState<Pedido | null>(null)
@@ -105,16 +107,42 @@ function TabPedidos() {
   useEffect(() => { fetchData() }, [])
 
   async function fetchData() {
-    try { const { data } = await api.get('/api/pedidos/'); setRows(data.results ?? data) }
+    try { 
+      const { data } = await api.get('/api/pedidos/')
+      const lista = data.results ?? data
+      setRows(Array.isArray(lista) ? lista : []) 
+    }
     catch { setRows([]) }
   }
 
+  // ── AQUI: Função save() converte tudo para números (IDs)
   async function save() {
     setSaving(true)
     try {
-      await api.post('/api/pedidos/', { ...form, itens })
-      setModal(false); fetchData()
-    } catch { alert('Erro ao criar pedido') } finally { setSaving(false) }
+      const payload = {
+        empresa: 1, // Empresa obrigatória!
+        cliente: Number(form.cliente),
+        vendedor: Number(form.vendedor),
+        condicao_pagamento: Number(form.condicao_pagamento),
+        forma_pagamento: Number(form.forma_pagamento),
+        observacao: form.observacao,
+        itens: itens.map(i => ({
+          produto: Number(i.produto),
+          quantidade: Number(i.quantidade),
+          preco_unitario: Number(i.preco_unitario),
+          desconto: Number(i.desconto)
+        }))
+      }
+      
+      await api.post('/api/pedidos/', payload)
+      setModal(false)
+      fetchData()
+    } catch (error) { 
+      console.error(error)
+      alert('Erro ao criar pedido. Verifique o console.') 
+    } finally { 
+      setSaving(false) 
+    }
   }
 
   async function faturar() {
@@ -206,7 +234,7 @@ function TabPedidos() {
         </div>
         <div className="flex-1" />
         <ExportButtons endpoint="/api/pedidos/" params={filterStatus ? { status: filterStatus } : {}} filename="pedidos_venda" selectedIds={sel.size > 0 ? [...sel] : undefined} />
-        <button onClick={() => { setItens([{ produto:'',quantidade:1,preco_unitario:0,desconto:0 }]); setModal(true) }}
+        <button onClick={() => { setItens([{ produto:'1',quantidade:1,preco_unitario:150,desconto:0 }]); setForm(f => ({ ...f, cliente: '1', vendedor: '1' })); setModal(true) }}
           className="flex items-center gap-2 bg-accent text-bg text-sm font-semibold px-4 py-2 rounded-lg hover:bg-accent/90 transition-colors">
           <Plus size={16} /> Novo Pedido
         </button>
@@ -276,28 +304,26 @@ function TabPedidos() {
         <Modal title="Novo Pedido de Venda" onClose={() => setModal(false)} wide>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Cliente *"><input className={inp} value={form.cliente} onChange={e => setForm(f=>({...f,cliente:e.target.value}))} placeholder="Nome ou CNPJ" /></Field>
-              <Field label="Vendedor">
-                <input className={inp} value={form.vendedor} onChange={e => setForm(f=>({...f,vendedor:e.target.value}))} placeholder="Nome do vendedor" defaultValue={user?.nome} />
+              <Field label="Cliente (ID) *">
+                <input type="number" className={inp} value={form.cliente} onChange={e => setForm(f=>({...f,cliente:e.target.value}))} placeholder="Ex: 1" />
+              </Field>
+              <Field label="Vendedor (ID)">
+                <input type="number" className={inp} value={form.vendedor} onChange={e => setForm(f=>({...f,vendedor:e.target.value}))} placeholder="Ex: 1" />
               </Field>
             </div>
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Condição de Pagamento">
+              <Field label="Condição de Pagamento (ID)">
                 <Sel value={form.condicao_pagamento} onChange={v => setForm(f=>({...f,condicao_pagamento:v}))}>
-                  <option value="a_vista">À vista</option>
-                  <option value="30">30 dias</option>
-                  <option value="30/60">30/60 dias</option>
-                  <option value="30/60/90">30/60/90 dias</option>
+                  <option value="1">Condição ID 1</option>
+                  <option value="2">Condição ID 2</option>
+                  <option value="3">Condição ID 3</option>
                 </Sel>
               </Field>
-              <Field label="Forma de Pagamento">
+              <Field label="Forma de Pagamento (ID)">
                 <Sel value={form.forma_pagamento} onChange={v => setForm(f=>({...f,forma_pagamento:v}))}>
-                  <option value="boleto">Boleto</option>
-                  <option value="pix">PIX</option>
-                  <option value="cartao_credito">Cartão Crédito</option>
-                  <option value="cartao_debito">Cartão Débito</option>
-                  <option value="dinheiro">Dinheiro</option>
-                  <option value="cheque">Cheque</option>
+                  <option value="1">Forma ID 1</option>
+                  <option value="2">Forma ID 2</option>
+                  <option value="3">Forma ID 3</option>
                 </Sel>
               </Field>
             </div>
@@ -306,14 +332,14 @@ function TabPedidos() {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-medium text-text-secondary">Itens do Pedido</label>
-                <button onClick={() => setItens(i => [...i, { produto:'',quantidade:1,preco_unitario:0,desconto:0 }])}
+                <button onClick={() => setItens(i => [...i, { produto:'1',quantidade:1,preco_unitario:0,desconto:0 }])}
                   className="text-xs text-accent hover:text-accent/80 flex items-center gap-1"><Plus size={12} /> Adicionar item</button>
               </div>
               <div className="space-y-2">
                 {itens.map((item, i) => (
                   <div key={i} className="grid grid-cols-12 gap-2 items-center bg-card2 rounded-lg p-2">
                     <div className="col-span-4">
-                      <input className={inp} value={item.produto} onChange={e => setItens(its => its.map((x,j) => j===i ? {...x,produto:e.target.value} : x))} placeholder="Produto" />
+                      <input type="number" className={inp} value={item.produto} onChange={e => setItens(its => its.map((x,j) => j===i ? {...x,produto:e.target.value} : x))} placeholder="ID do Prod." />
                     </div>
                     <div className="col-span-2">
                       <input type="number" className={inp} value={item.quantidade} onChange={e => setItens(its => its.map((x,j) => j===i ? {...x,quantidade:+e.target.value} : x))} placeholder="Qtd" />
