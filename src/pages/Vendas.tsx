@@ -313,18 +313,10 @@ function TabPedidos() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Condição de Pagamento (ID)">
-                <Sel value={form.condicao_pagamento} onChange={v => setForm(f=>({...f,condicao_pagamento:v}))}>
-                  <option value="1">Condição ID 1</option>
-                  <option value="2">Condição ID 2</option>
-                  <option value="3">Condição ID 3</option>
-                </Sel>
+                <input type="number" className={inp} value={form.condicao_pagamento} onChange={e => setForm(f=>({...f,condicao_pagamento:e.target.value}))} placeholder="Ex: 2" />
               </Field>
               <Field label="Forma de Pagamento (ID)">
-                <Sel value={form.forma_pagamento} onChange={v => setForm(f=>({...f,forma_pagamento:v}))}>
-                  <option value="1">Forma ID 1</option>
-                  <option value="2">Forma ID 2</option>
-                  <option value="3">Forma ID 3</option>
-                </Sel>
+                <input type="number" className={inp} value={form.forma_pagamento} onChange={e => setForm(f=>({...f,forma_pagamento:e.target.value}))} placeholder="Ex: 2" />
               </Field>
             </div>
 
