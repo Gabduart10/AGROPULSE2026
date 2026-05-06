@@ -105,23 +105,20 @@ function TabPedidos() {
 
   useEffect(() => { fetchData() }, [])
 
-  // ─── BUSCA COM RAIO-X ───
+ // ─── BUSCA BLINDADA CONTRA FILTROS INVISÍVEIS ───
   async function fetchData() {
     try { 
-      // Deixamos o backend decidir a empresa sem forçar na URL
-      const res = await api.get('/api/pedidos/')
+      const res = await api.get('/api/pedidos/', {
+        params: {
+          empresa_id: user?.empresa_id || 1, // Pega a sua empresa
+          data_inicio: '', // Força o Django a não filtrar por data inicial
+          data_fim: '',    // Força o Django a não filtrar por data final
+          status: ''       // Traz todos os status
+        }
+      })
       
-      // RAIO-X: Isso vai imprimir no console EXATAMENTE o que o Django mandou
-      console.log("RESPOSTA CRUA DO DJANGO PARA PEDIDOS:", res.data)
-
       const lista = res.data.results ?? res.data.pedidos ?? res.data.data ?? res.data
-      
-      if (Array.isArray(lista)) {
-        setRows(lista)
-      } else {
-        console.error("O Django não devolveu uma lista. Devolveu isso:", lista)
-        setRows([])
-      }
+      setRows(Array.isArray(lista) ? lista : [])
     }
     catch (error) { 
       console.error("ERRO NA BUSCA DE PEDIDOS:", error)
@@ -129,17 +126,19 @@ function TabPedidos() {
     }
   }
 
-  // ─── SALVAMENTO BLINDADO ───
+  // ─── SALVAMENTO COM DATA CRAVADA ───
   async function save() {
     setSaving(true)
     try {
       const payload = {
-        empresa: user?.empresa_id || 1, // Pega a empresa real do usuário logado!
+        empresa: user?.empresa_id || 1, 
         cliente: Number(form.cliente),
         vendedor: Number(form.vendedor),
         condicao_pagamento: Number(form.condicao_pagamento),
         forma_pagamento: Number(form.forma_pagamento),
-        status: 'aguardando', // Forçamos o status para não cair no limbo
+        status: 'aguardando',
+        // AQUI ESTÁ A MÁGICA: Mandando a data de hoje (YYYY-MM-DD)
+        data_pedido: new Date().toISOString().split('T')[0], 
         observacao: form.observacao,
         itens: itens.map(i => ({
           produto: Number(i.produto),
@@ -149,10 +148,9 @@ function TabPedidos() {
         }))
       }
       
-      console.log("ENVIANDO PARA O DJANGO:", payload)
       await api.post('/api/pedidos/', payload)
       setModal(false)
-      fetchData()
+      fetchData() // Atualiza a tabela na hora
     } catch (error: any) { 
       console.error("ERRO AO SALVAR:", error.response?.data || error)
       alert('Erro ao criar pedido. Olhe a aba Console (F12).') 
