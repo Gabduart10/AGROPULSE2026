@@ -461,6 +461,8 @@ function TabPedidos() {
 
 // ─── Tab Orçamentos ───────────────────────────────────────────────────────────
 
+// ─── Tab Orçamentos ───────────────────────────────────────────────────────────
+
 function TabOrcamentos() {
   const [rows, setRows] = useState<Orcamento[]>([])
   const [search, setSearch] = useState('')
@@ -472,12 +474,23 @@ function TabOrcamentos() {
   const [itens, setItens] = useState([{ produto: '', quantidade: 1, preco_unitario: 0 }])
 
   useEffect(() => {
-    api.get('/api/orcamentos/').then(({ data }) => setRows(data.results ?? data)).catch(() => setRows([]))
+    // 1. Enviando o ID da empresa para o Django ficar feliz
+    api.get('/api/orcamentos/', { params: { empresa: 1, empresa_id: 1 } })
+      .then(({ data }) => {
+        const lista = data.results ?? data
+        // 2. Trava de segurança contra tela branca!
+        setRows(Array.isArray(lista) ? lista : [])
+      })
+      .catch(() => setRows([]))
   }, [])
 
   async function save() {
     setSaving(true)
-    try { await api.post('/api/orcamentos/', { ...form, itens }); setModal(false) }
+    try { 
+      // Enviando empresa=1 na hora de criar um orçamento novo também
+      await api.post('/api/orcamentos/', { ...form, itens, empresa: 1 })
+      setModal(false) 
+    }
     catch { alert('Erro ao salvar') } finally { setSaving(false) }
   }
 
@@ -491,7 +504,13 @@ function TabOrcamentos() {
   }
 
   const statusColor: Record<string, 'green'|'yellow'|'gray'|'red'> = { aberto:'yellow', convertido:'green', expirado:'red', cancelado:'gray' }
-  const filtered = rows.filter(r => r.cliente_nome?.toLowerCase().includes(search.toLowerCase()))
+  
+  // 3. Trava de segurança no filtro para buscar o nome ou o ID
+  const filtered = rows.filter(r => {
+    const nome = (r as any).cliente_nome || `Cliente ID ${(r as any).cliente || ''}`
+    return nome.toLowerCase().includes(search.toLowerCase())
+  })
+
   function toggleSel(id: number) { setSel(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n }) }
   function toggleAll() { setSel(s => s.size === filtered.length && filtered.length > 0 ? new Set() : new Set(filtered.map(r => r.id))) }
 
@@ -528,13 +547,14 @@ function TabOrcamentos() {
               <tr key={r.id} className={`border-b border-border/50 hover:bg-card2 transition-colors ${sel.has(r.id) ? 'bg-accent/5' : ''}`}>
                 <td className="px-4 py-3"><input type="checkbox" className="rounded" checked={sel.has(r.id)} onChange={() => toggleSel(r.id)} /></td>
                 <td className="px-4 py-3 font-mono text-text-muted text-xs">#{r.id}</td>
-                <td className="px-4 py-3 font-medium text-text-primary">{r.cliente_nome}</td>
-                <td className="px-4 py-3 font-mono font-semibold text-text-primary">{fmt(r.valor_total)}</td>
+                {/* Mostra o nome ou o ID como fizemos em Pedidos */}
+                <td className="px-4 py-3 font-medium text-text-primary">{(r as any).cliente_nome || `Cliente ID ${(r as any).cliente}`}</td>
+                <td className="px-4 py-3 font-mono font-semibold text-text-primary">{fmt(r.valor_total || 0)}</td>
                 <td className="px-4 py-3 text-text-muted text-xs">{r.criado_em}</td>
                 <td className="px-4 py-3 text-text-muted text-xs">{r.validade}</td>
-                <td className="px-4 py-3"><Badge label={r.status} color={statusColor[r.status]??'gray'} /></td>
+                <td className="px-4 py-3"><Badge label={r.status || 'aberto'} color={statusColor[r.status]??'gray'} /></td>
                 <td className="px-4 py-3">
-                  {r.status === 'aberto' && (
+                  {(r.status === 'aberto' || r.status === 'orcamento') && (
                     <button onClick={() => converter(r.id)} disabled={converting === r.id}
                       className="text-xs bg-accent/10 text-accent px-3 py-1 rounded-lg hover:bg-accent/20 transition-colors disabled:opacity-60 font-medium">
                       {converting === r.id ? '...' : 'Converter em Pedido'}
@@ -551,7 +571,8 @@ function TabOrcamentos() {
         <Modal title="Novo Orçamento" onClose={() => setModal(false)} wide>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Cliente *"><input className={inp} value={form.cliente} onChange={e => setForm(f=>({...f,cliente:e.target.value}))} placeholder="Nome ou CNPJ" /></Field>
+              {/* Ajustado para ID igual fizemos nos pedidos */}
+              <Field label="Cliente (ID) *"><input type="number" className={inp} value={form.cliente} onChange={e => setForm(f=>({...f,cliente:e.target.value}))} placeholder="Ex: 1" /></Field>
               <Field label="Validade (dias)"><input type="number" className={inp} value={form.validade_dias} onChange={e => setForm(f=>({...f,validade_dias:e.target.value}))} /></Field>
             </div>
             <div>
@@ -561,7 +582,7 @@ function TabOrcamentos() {
               </div>
               {itens.map((item, i) => (
                 <div key={i} className="grid grid-cols-12 gap-2 items-center bg-card2 rounded-lg p-2 mb-2">
-                  <div className="col-span-5"><input className={inp} value={item.produto} onChange={e => setItens(its => its.map((x,j) => j===i ? {...x,produto:e.target.value}:x))} placeholder="Produto" /></div>
+                  <div className="col-span-5"><input type="number" className={inp} value={item.produto} onChange={e => setItens(its => its.map((x,j) => j===i ? {...x,produto:e.target.value}:x))} placeholder="ID Produto" /></div>
                   <div className="col-span-3"><input type="number" className={inp} value={item.quantidade} onChange={e => setItens(its => its.map((x,j) => j===i ? {...x,quantidade:+e.target.value}:x))} placeholder="Qtd" /></div>
                   <div className="col-span-3"><input type="number" className={inp} value={item.preco_unitario} onChange={e => setItens(its => its.map((x,j) => j===i ? {...x,preco_unitario:+e.target.value}:x))} placeholder="Preço" /></div>
                   <button onClick={() => setItens(its => its.filter((_,j)=>j!==i))} className="col-span-1 flex justify-center text-text-muted hover:text-red-500"><X size={14}/></button>
