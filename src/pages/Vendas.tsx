@@ -106,13 +106,13 @@ function TabPedidos() {
 
   useEffect(() => { fetchData() }, [])
 
- async function fetchData() {
+async function fetchData() {
     try { 
-      // Forçamos o parâmetro da empresa diretamente no Axios para o Django nos liberar os dados!
       const { data } = await api.get('/api/pedidos/', { 
-        params: { empresa_id: 1, empresa: 1 } // Mandamos os dois formatos possíveis por precaução
+        params: { empresa: 1, empresa_id: 1 } 
       })
-      const lista = data.results ?? data
+      // O pulo do gato: procurando a gaveta "pedidos"!
+      const lista = data.pedidos ?? data.results ?? data.data ?? data
       setRows(Array.isArray(lista) ? lista : []) 
     }
     catch (error) { 
@@ -474,11 +474,10 @@ function TabOrcamentos() {
   const [itens, setItens] = useState([{ produto: '', quantidade: 1, preco_unitario: 0 }])
 
   useEffect(() => {
-    // 1. Enviando o ID da empresa para o Django ficar feliz
     api.get('/api/orcamentos/', { params: { empresa: 1, empresa_id: 1 } })
       .then(({ data }) => {
-        const lista = data.results ?? data
-        // 2. Trava de segurança contra tela branca!
+        // Agora o React vai procurar na gaveta "orcamentos" primeiro!
+        const lista = data.orcamentos ?? data.results ?? data.data ?? data
         setRows(Array.isArray(lista) ? lista : [])
       })
       .catch(() => setRows([]))
