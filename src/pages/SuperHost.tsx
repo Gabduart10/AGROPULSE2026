@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Shield, Ban, CheckCircle, Search, LogIn, X, Settings, Building2, ChevronDown, ChevronUp, Plus, Save } from 'lucide-react'
+import { Shield, Ban, CheckCircle, Search, LogIn, X, Settings, Building2, ChevronDown, ChevronUp, Plus, Save, UserPlus } from 'lucide-react'
 import { api } from '../lib/api'
 
 interface Empresa {
@@ -224,6 +224,100 @@ function PainelPlano({ empresa, onClose }: { empresa: Empresa; onClose: () => vo
   )
 }
 
+// ─── Modal de Novo Usuário ───────────────────────────────────────────────────
+
+function ModalNovoUsuario({ empresas, onConfirm, onClose }: {
+  empresas: Empresa[]
+  onConfirm: () => void
+  onClose: () => void
+}) {
+  const [formData, setFormData] = useState({
+    nome: '',
+    email: '',
+    senha: '',
+    tipo: 'admin',
+    empresa_id: ''
+  })
+  const [salvando, setSalvando] = useState(false)
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setSalvando(true)
+    try {
+      await api.post('/api/superhost/usuarios/cadastrar/', formData)
+      onConfirm()
+    } catch (error) {
+      alert('Erro ao cadastrar usuário.')
+    } finally {
+      setSalvando(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md shadow-xl">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-border">
+          <h2 className="font-semibold text-text-primary">Cadastrar Novo Usuário</h2>
+          <button onClick={onClose} className="text-text-muted hover:text-text-primary"><X size={18} /></button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">Nome Completo</label>
+              <input required value={formData.nome} onChange={e => setFormData({...formData, nome: e.target.value})}
+                className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent" />
+            </div>
+            
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">E-mail</label>
+              <input type="email" required value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})}
+                className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent" />
+            </div>
+            
+            <div>
+              <label className="block text-xs font-medium text-text-muted mb-1">Senha Inicial</label>
+              <input type="password" required value={formData.senha} onChange={e => setFormData({...formData, senha: e.target.value})}
+                className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent" />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-text-muted mb-1">Nível de Acesso</label>
+                <select value={formData.tipo} onChange={e => setFormData({...formData, tipo: e.target.value})}
+                  className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent">
+                  <option value="admin">SuperAdmin</option>
+                  <option value="cliente">Cliente (Tenant)</option>
+                </select>
+              </div>
+
+              {formData.tipo === 'cliente' && (
+                <div>
+                  <label className="block text-xs font-medium text-text-muted mb-1">Empresa Vinculada</label>
+                  <select required value={formData.empresa_id} onChange={e => setFormData({...formData, empresa_id: e.target.value})}
+                    className="w-full bg-card2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent">
+                    <option value="">Selecione...</option>
+                    {empresas.map(emp => (
+                      <option key={emp.id} value={emp.id}>{emp.nome}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-4 mt-2 border-t border-border">
+            <button type="button" onClick={onClose} className="flex-1 text-sm px-4 py-2 rounded-lg border border-border text-text-muted hover:text-text-primary">Cancelar</button>
+            <button type="submit" disabled={salvando} className="flex-1 flex items-center justify-center gap-2 text-sm font-semibold px-4 py-2 rounded-lg bg-accent text-bg hover:bg-accent/90 disabled:opacity-60">
+              <Save size={16} /> {salvando ? 'Salvando...' : 'Cadastrar'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
 // ─── Página principal ─────────────────────────────────────────────────────────
 
 export default function SuperHost() {
@@ -234,6 +328,7 @@ export default function SuperHost() {
   const [blocking, setBlocking] = useState<number | null>(null)
   const [modalAcesso, setModalAcesso] = useState<Empresa | null>(null)
   const [modalPlano, setModalPlano] = useState<Empresa | null>(null)
+  const [modalNovoUsuario, setModalNovoUsuario] = useState(false)
 
   useEffect(() => { fetchData() }, [])
 
@@ -282,14 +377,25 @@ export default function SuperHost() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
-          <Shield size={20} className="text-purple-600" />
+      
+      {/* Header atualizado com o botão de Novo Usuário */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-purple-100 flex items-center justify-center">
+            <Shield size={20} className="text-purple-600" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-text-primary">Painel SuperHost</h1>
+            <p className="text-sm text-text-muted">Gerenciamento de todos os tenants da plataforma</p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-xl font-bold text-text-primary">Painel SuperHost</h1>
-          <p className="text-sm text-text-muted">Gerenciamento de todos os tenants da plataforma</p>
-        </div>
+
+        <button 
+          onClick={() => setModalNovoUsuario(true)}
+          className="flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-xl bg-accent text-bg hover:bg-accent/90 transition-colors shadow-sm"
+        >
+          <UserPlus size={16} /> Novo Usuário
+        </button>
       </div>
 
       {/* Stats */}
@@ -404,6 +510,17 @@ export default function SuperHost() {
 
       {modalPlano && (
         <PainelPlano empresa={modalPlano} onClose={() => setModalPlano(null)} />
+      )}
+
+      {modalNovoUsuario && (
+        <ModalNovoUsuario
+          empresas={empresas}
+          onConfirm={() => {
+            setModalNovoUsuario(false)
+            alert('Usuário cadastrado com sucesso!')
+          }}
+          onClose={() => setModalNovoUsuario(false)}
+        />
       )}
     </div>
   )
